@@ -1,5 +1,10 @@
-﻿using GHelper;
+using GHelper;
 using GHelper.USB;
+using OmenCore.Hardware;
+using OmenCore.Models;
+using OmenCore.Services;
+using GHelper.Helpers;
+using PawnIO;
 using System.Management;
 using System.Runtime.InteropServices;
 
@@ -9,6 +14,682 @@ public enum AsusFan
     GPU = 1,
     Mid = 2,
     XGM = 3
+}
+
+internal sealed class OmenBackend : IDisposable
+{
+    // ====================================================================================================
+    // [TEMPERATURE FIX 2026-05-29] 
+    // Integrated WmiBiosMonitor for high-precision CPU/GPU temperatures with freeze-detection and fallbacks.
+    // Legacy BIOS-only code is preserved in comments for easy reversal.
+    // ====================================================================================================
+
+    private readonly LoggingService _logging;
+    private readonly HpWmiBios _bios;
+    private readonly WmiFanController _fans;
+    private readonly WmiBiosMonitor _monitor; // [NEW] High-precision monitor
+    private readonly IMsrAccess? _msrAccess;
+    private readonly byte[][] _curves = new byte[2][];
+    private int? _targetCpuPl1;
+    private int? _targetCpuPl2;
+    private int _lastEvaluatedCpuPercent = -1;
+    private int _lastEvaluatedGpuPercent = -1;
+
+    // [MODIFIED] Constructor now accepts WmiBiosMonitor
+    private OmenBackend(LoggingService logging, HpWmiBios bios, WmiFanController fans, WmiBiosMonitor monitor, IMsrAccess? msrAccess)
+    {
+        _logging = logging;
+        _bios = bios;
+        _fans = fans;
+        _monitor = monitor; // [NEW]
+        _msrAccess = msrAccess;
+        _curves[(int)AsusFan.CPU] = DefaultCurve(AsusFan.CPU);
+        _curves[(int)AsusFan.GPU] = DefaultCurve(AsusFan.GPU);
+        
+        // Read CPU's actual max power from MSR 0x614 or MMIO for the slider max
+        if (msrAccess?.IsAvailable == true && !PawnIO.CpuInfo.IsAMD)
+        {
+            int maxPower = -1;
+            bool fromMmio = false;
+            
+            try 
+            {
+                var mmioAccess = new OmenCore.Hardware.PawnIOMmioAccess((OmenCore.Hardware.PawnIOMsrAccess)msrAccess);
+                if (mmioAccess.IsAvailable) 
+                {
+                    var mmioLimits = new OmenCore.Hardware.MmioPowerLimitProvider(mmioAccess);
+                    if (mmioLimits.IsAvailable) 
+                    {
+                        maxPower = mmioLimits.ReadMaxPowerWatts();
+                        var limits = mmioLimits.GetPowerLimits();
+                        
+                        // If max power info is suspiciously low or fallback, use the BIOS's dynamic PL2 limit
+                        if (limits.Pl2Watts > maxPower && limits.Pl2Watts < 500)
+                            maxPower = (int)Math.Round(limits.Pl2Watts);
+                            
+                        fromMmio = true;
+                    }
+                }
+            } 
+            catch { }
+            
+            if (maxPower <= 0)
+                maxPower = msrAccess.ReadMaxPowerWatts();
+                
+            if (maxPower > 0 && maxPower < 500) // sanity check
+            {
+                AsusACPI.MaxTotal = Math.Max(maxPower, 150);
+                Logger.WriteLine($"[OmenBackend] MaxTotal set to {AsusACPI.MaxTotal}W (detected {maxPower}W from {(fromMmio ? "MMIO" : "MSR")})");
+            }
+        }
+    }
+
+    /* [LEGACY CONSTRUCTOR]
+    private OmenBackend(LoggingService logging, HpWmiBios bios, WmiFanController fans, IMsrAccess? msrAccess)
+    {
+        _logging = logging;
+        _bios = bios;
+        _fans = fans;
+        _msrAccess = msrAccess;
+        _curves[(int)AsusFan.CPU] = DefaultCurve(AsusFan.CPU);
+        _curves[(int)AsusFan.GPU] = DefaultCurve(AsusFan.GPU);
+    }
+    */
+
+    public bool IsAvailable => _bios.IsAvailable || _fans.IsAvailable;
+    private bool HasCpuPowerLimitControl => !CpuInfo.IsAMD && _msrAccess?.IsAvailable == true;
+
+    public static OmenBackend? TryCreate()
+    {
+        if (!IsHpOmenSystem()) return null;
+
+        try
+        {
+            var logging = new LoggingService();
+            logging.Initialize();
+            logging.LogEmitted += Logger.WriteLine;
+
+            var bios = new HpWmiBios(logging);
+            var fans = new WmiFanController(null, logging, injectedWmiBios: bios);
+            var msrAccess = MsrAccessFactory.Create(logging);
+
+            // [NEW] Initialize high-precision monitor components
+            var nvapi = new NvapiService(logging);
+            var monitor = new WmiBiosMonitor(logging, nvapi);
+
+            Logger.WriteLine($"OMEN backend: BIOS={bios.Status}, Fans={fans.Status}, MSR={MsrAccessFactory.StatusMessage}, Monitor={monitor.MonitoringSource}");
+            
+            // [MODIFIED] Return backend with monitor
+            return new OmenBackend(logging, bios, fans, monitor, msrAccess);
+
+            /* [LEGACY TRYCREATE RETURN]
+            Logger.WriteLine($"OMEN backend: BIOS={bios.Status}, Fans={fans.Status}, MSR={MsrAccessFactory.StatusMessage}");
+            return new OmenBackend(logging, bios, fans, msrAccess);
+            */
+        }
+        catch (Exception ex)
+        {
+            Logger.WriteLine($"OMEN backend init failed: {ex.Message}");
+            return null;
+        }
+    }
+
+    public bool HasPerKeyRgb()
+    {
+        return _bios?.GetKeyboardType() == OmenCore.Hardware.HpWmiBios.KbdType.PerKeyRgb;
+    }
+
+    public void SetColor(System.Drawing.Color color)
+    {
+        // For 4-zone we use SetColorTable with 128-byte array
+        byte[] colors = new byte[128];
+        colors[0] = 4; // number of zones is usually at index 0 for 4-zone (or wait, let's use the helper if exists)
+        
+        // Let's just use the helper: SetColorTable(byte[] zoneColors, bool ensureBacklightOn = true)
+        // HpWmiBios.SetColorTable expects just the RGB triplets for each zone.
+        byte[] zoneColors = new byte[12]; // 4 zones * 3 bytes (R,G,B)
+        for (int i = 0; i < 4; i++)
+        {
+            zoneColors[i * 3] = color.R;
+            zoneColors[i * 3 + 1] = color.G;
+            zoneColors[i * 3 + 2] = color.B;
+        }
+        _bios?.SetColorTable(zoneColors);
+    }
+
+    public bool TryIsSupported(uint deviceId, out bool supported)
+    {
+        supported = deviceId switch
+        {
+            AsusACPI.DevsCPUFanCurve or AsusACPI.DevsGPUFanCurve => IsAvailable,
+            AsusACPI.DevsCPUFan or AsusACPI.DevsGPUFan => IsAvailable,
+            AsusACPI.CPU_Fan or AsusACPI.GPU_Fan => IsAvailable,
+            AsusACPI.PerformanceMode => IsAvailable,
+            AsusACPI.BatteryLimit => _bios.IsAvailable,
+            
+            // [MODIFIED] Temps now supported as long as either BIOS or Monitor is available
+            AsusACPI.Temp_CPU or AsusACPI.Temp_GPU => IsAvailable,
+            /* [LEGACY SUPPORT] 
+            AsusACPI.Temp_CPU or AsusACPI.Temp_GPU => _bios.IsAvailable, 
+            */
+            
+            AsusACPI.GPUEcoROG or AsusACPI.GPUEcoVivo => _bios.IsAvailable, // OMEN has Optimus (iGPU-only) mode
+            AsusACPI.GPUMuxROG or AsusACPI.GPUMuxVivo => _bios.IsAvailable, // Hybrid/Discrete MUX
+            AsusACPI.GPU_POWER => _bios.IsAvailable,
+            AsusACPI.PPT_APUA0 or AsusACPI.PPT_APUA3 or AsusACPI.PPT_APUC1 => HasCpuPowerLimitControl,
+            _ => false
+        };
+
+        return supported;
+    }
+
+    public bool TryDeviceSet(uint deviceId, int status, string? logName, out int result)
+    {
+        result = -1;
+
+        if (deviceId == AsusACPI.PerformanceMode)
+        {
+            string mode = status switch
+            {
+                AsusACPI.PerformanceTurbo => "Performance",
+                AsusACPI.PerformanceSilent => "Quiet",
+                _ => "Balanced"
+            };
+
+            result = _fans.SetPerformanceMode(mode) ? 1 : -1;
+            Logger.WriteLine($"{logName ?? "OmenMode"} = {mode} : {(result == 1 ? "OK" : result)}");
+            return true;
+        }
+
+        if (deviceId == AsusACPI.BatteryLimit)
+        {
+            result = _bios.SetBatteryCareMode(status < 100) ? 1 : -1;
+            Logger.WriteLine($"{logName ?? "OmenBatteryLimit"} = {(status < 100 ? "80%" : "100%")} : {(result == 1 ? "OK" : result)}");
+            return true;
+        }
+
+        // GPU MUX: 0 = Discrete (Ultimate), 1 = Hybrid (Standard)
+        if (deviceId == AsusACPI.GPUMuxROG || deviceId == AsusACPI.GPUMuxVivo)
+        {
+            var targetMode = status == 0 ? HpWmiBios.GpuMode.Discrete : HpWmiBios.GpuMode.Hybrid;
+            result = _bios.SetGpuMode(targetMode) ? 1 : -1;
+            Logger.WriteLine($"{logName ?? "OmenGpuMux"} = {targetMode} : {(result == 1 ? "OK" : result)}");
+            return true;
+        }
+
+        if (deviceId == AsusACPI.GPU_POWER)
+        {
+            // Omen only supports specific boost levels via WMI
+            HpWmiBios.GpuPowerLevel level = HpWmiBios.GpuPowerLevel.Medium;
+            if (status <= 10) level = HpWmiBios.GpuPowerLevel.Minimum;
+            else if (status >= 20) level = HpWmiBios.GpuPowerLevel.Maximum;
+
+            result = _fans.SetGpuPower(level) ? 1 : -1;
+            Logger.WriteLine($"{logName ?? "OmenGpuPower"} = {level} ({status}W) : {(result == 1 ? "OK" : result)}");
+            return true;
+        }
+
+        if (deviceId == AsusACPI.PPT_APUA3 || deviceId == AsusACPI.PPT_APUA0 || deviceId == AsusACPI.PPT_APUC1)
+        {
+            // PPT_APUC1 (fPPT) maps to PL2 on Intel, same as PPT_APUA0
+            uint effectiveId = (deviceId == AsusACPI.PPT_APUC1) ? AsusACPI.PPT_APUA0 : deviceId;
+            result = SetCpuPowerLimit(effectiveId, status) ? 1 : -1;
+            Logger.WriteLine($"{logName ?? "OmenPowerLimit"} = {status}W : {(result == 1 ? "OK" : result)}");
+            return true;
+        }
+
+        return false;
+    }
+
+    public bool TryDeviceSet(uint deviceId, byte[] parameters, string? logName, out int result)
+    {
+        result = -1;
+        return false;
+    }
+
+    /// <summary>
+    /// Called from AsusACPI.SetGPUEco — bypasses the ASUS eco-flag roundtrip.
+    /// eco=0 → Hybrid (Standard), eco=1 → Optimus/iGPU-only (Eco).
+    /// </summary>
+    public bool TrySetGpuEco(int eco, out int result)
+    {
+        result = -1;
+        if (!_bios.IsAvailable) return false;
+        // eco=1 → iGPU-only (Optimus), eco=0 → Hybrid (both GPUs)
+        var targetMode = eco == 1 ? HpWmiBios.GpuMode.Optimus : HpWmiBios.GpuMode.Hybrid;
+        result = _bios.SetGpuMode(targetMode) ? 1 : -1;
+        Logger.WriteLine($"OmenGpuEco eco={eco} → {targetMode} : {(result == 1 ? "OK" : result)}");
+        return true;
+    }
+
+    public bool TryDeviceGet(uint deviceId, out int result)
+    {
+        // [NEW] Temperature interception logic using high-precision monitor
+        if (deviceId == AsusACPI.Temp_CPU || deviceId == AsusACPI.Temp_GPU)
+        {
+            // Skip NVAPI GPU queries if in Eco mode, fall through to WMI BIOS fallback
+            if (deviceId == AsusACPI.Temp_GPU && HardwareControl.IsEcoMode())
+            {
+                // Fall through to WMI BIOS fallback which doesn't wake the dGPU
+            }
+            else
+            {
+                try
+                {
+                    // Use the high-precision monitor which handles ACPI thermal zones and LHM fallbacks
+                    var sample = Task.Run(() => _monitor.ReadSampleAsync(default)).GetAwaiter().GetResult();
+                    double temp = (deviceId == AsusACPI.Temp_CPU) ? sample.CpuTemperatureC : sample.GpuTemperatureC;
+                    if (temp > 0)
+                    {
+                        result = (int)Math.Round(temp);
+                        return true;
+                    }
+                }
+                catch { }
+            }
+        }
+
+        result = deviceId switch
+        {
+            AsusACPI.PerformanceMode => 0,
+            AsusACPI.BatteryLimit => (_bios.GetBatteryCareMode() ?? false) ? 80 : 100,
+            AsusACPI.CPU_Fan => ReadFanRpm(cpu: true),
+            AsusACPI.GPU_Fan => ReadFanRpm(cpu: false),
+            AsusACPI.DevsCPUFanCurve or AsusACPI.DevsGPUFanCurve => IsAvailable ? 1 : -1,
+            AsusACPI.DevsCPUFan or AsusACPI.DevsGPUFan => IsAvailable ? 1 : -1,
+            
+            // [MODIFIED] High-precision path above intercepting; switched to legacy fallbacks here
+            AsusACPI.Temp_CPU => (int)(_bios.GetTemperature() ?? -1),
+            AsusACPI.Temp_GPU => (int)(_bios.GetGpuTemperature() ?? -1),
+            /* [LEGACY GET]
+            AsusACPI.Temp_CPU => (int)(_bios.GetTemperature() ?? -1),
+            AsusACPI.Temp_GPU => (int)(_bios.GetGpuTemperature() ?? -1),
+            */
+
+            // GPUEco: 1 = currently in Optimus/iGPU-only mode, 0 = not in eco mode
+            AsusACPI.GPUEcoROG or AsusACPI.GPUEcoVivo => ReadGpuEcoFlag(),
+            // GPUMux: Discrete=0 (Ultimate), Hybrid=1 (Standard)
+            AsusACPI.GPUMuxROG or AsusACPI.GPUMuxVivo => ReadGpuMuxFlag(),
+            AsusACPI.GPU_POWER => ReadGpuPowerFlag(),
+            AsusACPI.PPT_APUA3 => ReadCpuPowerLimit(pl2: false),
+            AsusACPI.PPT_APUA0 or AsusACPI.PPT_APUC1 => ReadCpuPowerLimit(pl2: true),
+            _ => int.MinValue
+        };
+
+        return result != int.MinValue;
+    }
+
+    private int ReadGpuEcoFlag()
+    {
+        try
+        {
+            var mode = _bios.GetGpuMode();
+            if (mode.HasValue)
+                return mode.Value == HpWmiBios.GpuMode.Optimus ? 1 : 0;
+        }
+        catch { }
+        return 0; // default: not in eco
+    }
+
+    private int ReadGpuMuxFlag()
+    {
+        try
+        {
+            var mode = _bios.GetGpuMode();
+            if (mode.HasValue)
+                // Discrete = Ultimate (mux=0), Hybrid/Optimus = Standard (mux=1)
+                return mode.Value == HpWmiBios.GpuMode.Discrete ? 0 : 1;
+        }
+        catch { }
+        return 1; // default Hybrid
+    }
+
+    private int ReadGpuPowerFlag()
+    {
+        try
+        {
+            var power = _fans.GetGpuPowerSettings();
+            if (power.HasValue)
+            {
+                // Map back to a UI wattage slider approximation
+                if (power.Value.customTgp && power.Value.ppab) return 25; // Maximum
+                if (power.Value.customTgp) return 15; // Medium
+                return 5; // Minimum
+            }
+        }
+        catch { }
+        return 15;
+    }
+
+    private OmenCore.Hardware.IMmioAccess? _mmioAccess;
+    private OmenCore.Hardware.MmioPowerLimitProvider? _mmioLimits;
+
+    private bool SetCpuPowerLimit(uint deviceId, int watts)
+    {
+        if (!HasCpuPowerLimitControl || _msrAccess == null)
+        {
+            Logger.WriteLine("OmenPowerLimit: MSR backend unavailable");
+            return false;
+        }
+
+        var status = _msrAccess.GetPowerLimitStatus();
+        int currentPl1 = status.Pl1Watts > 0 ? (int)Math.Round(status.Pl1Watts) : AsusACPI.DefaultTotal;
+        int currentPl2 = status.Pl2Watts > 0 ? (int)Math.Round(status.Pl2Watts) : Math.Max(currentPl1, AsusACPI.DefaultTotal);
+
+        if (deviceId == AsusACPI.PPT_APUA3)
+            _targetCpuPl1 = watts;
+        else
+            _targetCpuPl2 = watts;
+
+        int pl1 = Math.Clamp(_targetCpuPl1 ?? currentPl1, AsusACPI.MinTotal, AsusACPI.MaxTotal);
+        int pl2 = Math.Clamp(_targetCpuPl2 ?? currentPl2, AsusACPI.MinTotal, 200);
+        if (pl2 < pl1) pl2 = pl1;
+
+        // Primary: PawnIO MSR write to 0x610 (ThrottleStop method)
+        bool msrSuccess = _msrAccess.SetPowerLimits(pl1, pl2);
+        
+        if (msrSuccess)
+        {
+            Logger.WriteLine($"OmenPowerLimit: MSR write OK — PL1={pl1}W, PL2={pl2}W");
+        }
+        else
+        {
+            Logger.WriteLine("OmenPowerLimit: MSR write failed/unverified. Trying WinRing0 MMIO fallback...");
+        }
+
+        // Always attempt WinRing0 MMIO sync (write directly to MCHBAR+0x59A0) 
+        // as MMIO overrides MSR on Meteor Lake and newer platforms.
+        if (_mmioLimits == null)
+        {
+            if (_mmioAccess == null && _msrAccess != null)
+            {
+                _mmioAccess = new OmenCore.Hardware.PawnIOMmioAccess((OmenCore.Hardware.PawnIOMsrAccess)_msrAccess);
+                if (!_mmioAccess.IsAvailable)
+                {
+                    Logger.WriteLine("OmenPowerLimit: PawnIO MMIO fallback unavailable.");
+                    _mmioAccess = null;
+                }
+            }
+            if (_mmioAccess != null)
+            {
+                _mmioLimits = new OmenCore.Hardware.MmioPowerLimitProvider(_mmioAccess);
+            }
+        }
+
+        bool mmioSuccess = false;
+        if (_mmioLimits != null && _mmioLimits.IsAvailable && _mmioLimits.CanWriteLimits)
+        {
+            mmioSuccess = _mmioLimits.SetPowerLimits(pl1, pl2);
+            Logger.WriteLine($"OmenPowerLimit: MMIO write {(mmioSuccess ? "OK" : "FAILED")} — PL1={pl1}W, PL2={pl2}W");
+        }
+        else if (_mmioLimits != null)
+        {
+            Logger.WriteLine("OmenPowerLimit: MMIO fallback not available or read-only.");
+        }
+        
+        return msrSuccess || mmioSuccess;
+    }
+
+    public double GetCpuPackagePowerWatts()
+    {
+        double power = 0.0;
+        
+        try
+        {
+            var sample = Task.Run(() => _monitor.ReadSampleAsync(default)).GetAwaiter().GetResult();
+            power = sample.CpuPowerWatts;
+        }
+        catch { }
+
+        if (power > 0.0)
+            return power;
+
+        // Fallback to MSR
+        power = _msrAccess?.ReadCpuPackagePowerWatts() ?? 0.0;
+        
+        if (power <= 0.0)
+        {
+            if (_mmioLimits == null)
+            {
+                if (_mmioAccess == null)
+                {
+                    if (_msrAccess == null) return 0;
+                    _mmioAccess = new OmenCore.Hardware.PawnIOMmioAccess((OmenCore.Hardware.PawnIOMsrAccess)_msrAccess);
+                    if (!_mmioAccess.IsAvailable) { _mmioAccess = null; return 0; }
+                }
+                _mmioLimits = new OmenCore.Hardware.MmioPowerLimitProvider(_mmioAccess);
+                Logger.WriteLine($"[TelemetryTrace] Initialized MMIO Provider: Available={_mmioLimits.IsAvailable}");
+            }
+                
+            power = _mmioLimits.ReadCpuPackagePowerWatts();
+        }
+        
+        return power;
+    }
+
+    private int ReadCpuPowerLimit(bool pl2)
+    {
+        if (!HasCpuPowerLimitControl || _msrAccess == null)
+            return -1;
+
+        var status = _msrAccess.GetPowerLimitStatus();
+        double watts = pl2 ? status.Pl2Watts : status.Pl1Watts;
+        if (watts <= 0) return -1;
+        return (int)Math.Round(watts);
+    }
+
+    public bool TryDeviceGetBuffer(uint deviceId, uint status, out byte[]? result)
+    {
+        result = deviceId switch
+        {
+            AsusACPI.DevsCPUFanCurve => _curves[(int)AsusFan.CPU].ToArray(),
+            AsusACPI.DevsGPUFanCurve => _curves[(int)AsusFan.GPU].ToArray(),
+            _ => null
+        };
+
+        return result != null;
+    }
+
+    public bool TryGetBatteryDischarge(out decimal? discharge)
+    {
+        discharge = null;
+        return false;
+    }
+
+    public bool TryGetFan(AsusFan device, out int fan)
+    {
+        fan = device switch
+        {
+            AsusFan.CPU => ReadFanRpm(cpu: true),
+            AsusFan.GPU => ReadFanRpm(cpu: false),
+            _ => -1
+        };
+
+        return device is AsusFan.CPU or AsusFan.GPU;
+    }
+
+    public bool TryGetFanCurve(AsusFan device, int mode, out byte[]? curve)
+    {
+        curve = device switch
+        {
+            AsusFan.CPU => _curves[(int)AsusFan.CPU].ToArray(),
+            AsusFan.GPU => _curves[(int)AsusFan.GPU].ToArray(),
+            _ => null
+        };
+
+        return curve != null;
+    }
+
+    private double _ewmaCpuTemp = -1;
+    private double _ewmaGpuTemp = -1;
+
+    public bool TrySetFanCurve(AsusFan device, byte[] curve, out int result)
+    {
+        result = -1;
+        if (device is not (AsusFan.CPU or AsusFan.GPU)) return false;
+
+        // When GHelper resets to Factory Defaults, it sends an empty curve (all zeroes).
+        if (curve.Length != 16 || curve.All(singleByte => singleByte == 0))
+        {
+            _curves[(int)device] = new byte[16];
+            
+            // If BOTH CPU and GPU custom curves are now clear, restore BIOS automatic fan control
+            if (_curves[(int)AsusFan.CPU].All(b => b == 0) && _curves[(int)AsusFan.GPU].All(b => b == 0))
+            {
+                _lastEvaluatedCpuPercent = -1;
+                _lastEvaluatedGpuPercent = -1;
+                _ewmaCpuTemp = -1;
+                _ewmaGpuTemp = -1;
+                result = _fans.RestoreAutoControl() ? 1 : -1;
+                Logger.WriteLine($"OmenFanCurve: Restored BIOS Auto Control : {(result == 1 ? "OK" : result)}");
+            }
+            else
+            {
+                result = 1;
+            }
+            return true;
+        }
+
+        _curves[(int)device] = curve.ToArray();
+
+        int cpuTempRaw = (int)(HardwareControl.GetCPUTemp() ?? _bios.GetTemperature() ?? 0);
+        int gpuTempRaw = (int)(HardwareControl.GetGPUTemp() ?? _bios.GetGpuTemperature() ?? _bios.GetTemperature() ?? 0);
+
+        // HP's Lamda_Increase and Lamda_Decrease constants from SwFanControlCustomFanCurve
+        const double lamdaIncrease = 0.1;
+        const double lamdaDecrease = 0.1;
+
+        if (_ewmaCpuTemp < 0) _ewmaCpuTemp = cpuTempRaw;
+        if (_ewmaGpuTemp < 0) _ewmaGpuTemp = gpuTempRaw;
+
+        // EWMA formula from HP PowerContext.CalculateEWMA
+        _ewmaCpuTemp = cpuTempRaw >= _ewmaCpuTemp 
+            ? lamdaIncrease * cpuTempRaw + (1.0 - lamdaIncrease) * _ewmaCpuTemp 
+            : lamdaDecrease * cpuTempRaw + (1.0 - lamdaDecrease) * _ewmaCpuTemp;
+
+        _ewmaGpuTemp = gpuTempRaw >= _ewmaGpuTemp 
+            ? lamdaIncrease * gpuTempRaw + (1.0 - lamdaIncrease) * _ewmaGpuTemp 
+            : lamdaDecrease * gpuTempRaw + (1.0 - lamdaDecrease) * _ewmaGpuTemp;
+
+        int cpuPercent = EvaluateCurve(_curves[(int)AsusFan.CPU], (int)Math.Round(_ewmaCpuTemp));
+        int gpuPercent = EvaluateCurve(_curves[(int)AsusFan.GPU], (int)Math.Round(_ewmaGpuTemp));
+
+        // Deduplicate calls to avoid WMI log spam when temperature fluctuates but curve flatlines
+        if (cpuPercent == _lastEvaluatedCpuPercent && gpuPercent == _lastEvaluatedGpuPercent)
+        {
+            result = 1;
+            return true;
+        }
+
+        _lastEvaluatedCpuPercent = cpuPercent;
+        _lastEvaluatedGpuPercent = gpuPercent;
+
+        result = _fans.SetFanSpeeds(cpuPercent, gpuPercent) ? 1 : -1;
+        Logger.WriteLine($"OmenFanCurve {device}: CPU={cpuPercent}% GPU={gpuPercent}% (Temp {cpuTempRaw}C/{gpuTempRaw}C) : {(result == 1 ? "OK" : result)}");
+        return true;
+    }
+
+    private int ReadFanRpm(bool cpu)
+    {
+        try
+        {
+            var sample = Task.Run(() => _monitor.ReadSampleAsync(default)).GetAwaiter().GetResult();
+            int rawRpm = cpu ? sample.Fan1Rpm : sample.Fan2Rpm;
+            // GHelper's FormatFan expects duty-cycle units (0-100).
+            // When fanRpm mode is on it displays value*100 as RPM,
+            // so divide actual RPM by 100: 2400 RPM → 24 → displayed as "2400 RPM".
+            return Math.Max(0, rawRpm / 100);
+        }
+        catch { }
+
+        return -1;
+    }
+
+    private static int EvaluateCurve(byte[] curve, double temp)
+    {
+        if (curve.Length != 16) return 0;
+
+        int selected = curve[8];
+        for (int i = 0; i < 8; i++)
+        {
+            if (temp >= curve[i])
+                selected = curve[i + 8];
+        }
+
+        return Math.Clamp(selected, 0, 100);
+    }
+
+    private static byte[] DefaultCurve(AsusFan fan)
+    {
+        byte[] temps = { 30, 50, 60, 70, 76, 80, 90, 100 };
+        byte[] cpu = { 20, 35, 45, 55, 65, 75, 90, 100 };
+        byte[] gpu = { 25, 35, 45, 55, 70, 80, 92, 100 };
+        return temps.Concat(fan == AsusFan.GPU ? gpu : cpu).ToArray();
+    }
+
+    private static bool IsHpOmenSystem()
+    {
+        try
+        {
+            using var searcher = new ManagementObjectSearcher("SELECT Manufacturer, Model, SystemFamily FROM Win32_ComputerSystem");
+            foreach (ManagementObject obj in searcher.Get())
+            {
+                string manufacturer = obj["Manufacturer"]?.ToString() ?? "";
+                string model = obj["Model"]?.ToString() ?? "";
+                string family = obj["SystemFamily"]?.ToString() ?? "";
+                string combined = $"{manufacturer} {model} {family}";
+
+                return combined.Contains("HP", StringComparison.OrdinalIgnoreCase) &&
+                       (combined.Contains("OMEN", StringComparison.OrdinalIgnoreCase) ||
+                        combined.Contains("Victus", StringComparison.OrdinalIgnoreCase) ||
+                        combined.Contains("THETIGER", StringComparison.OrdinalIgnoreCase));
+            }
+        }
+        catch (Exception ex)
+        {
+            Logger.WriteLine($"OMEN detect failed: {ex.Message}");
+        }
+
+        return false;
+    }
+
+    public bool VerifyCpuPowerLimitsWriteable()
+    {
+        if (PawnIO.CpuInfo.IsAMD) return true;
+
+        if (!HasCpuPowerLimitControl || _msrAccess == null) return false;
+
+        var msrStatus = _msrAccess.GetPowerLimitStatus();
+        if (!msrStatus.IsLocked) return true;
+
+        try
+        {
+            if (_mmioLimits == null)
+            {
+                var mmioAccess = new OmenCore.Hardware.PawnIOMmioAccess((OmenCore.Hardware.PawnIOMsrAccess)_msrAccess);
+                if (mmioAccess.IsAvailable)
+                {
+                    _mmioLimits = new OmenCore.Hardware.MmioPowerLimitProvider(mmioAccess);
+                }
+            }
+
+            if (_mmioLimits != null && _mmioLimits.IsAvailable)
+            {
+                var mmioStatus = _mmioLimits.GetPowerLimits();
+                if (!mmioStatus.IsLocked) return true;
+            }
+        }
+        catch { }
+
+        return false;
+    }
+
+    public void Dispose()
+    {
+        _bios.Dispose();
+        _fans.Dispose();
+        _monitor.Dispose();
+    }
 }
 
 public enum AsusMode
@@ -187,6 +868,7 @@ public class AsusACPI
 
     private bool? _allAMD = null;
     private readonly Dictionary<uint, bool> _supportCache = new();
+    private readonly OmenBackend? _omen;
 
     public static uint GPUEco => AppConfig.IsVivoZenPro() ? GPUEcoVivo : GPUEcoROG;
     public static uint GPUMux => AppConfig.IsVivoZenPro() ? GPUMuxVivo : GPUMuxROG;
@@ -237,7 +919,13 @@ public class AsusACPI
     private IntPtr eventHandle;
     private bool _connected = false;
 
-    // still works only with asus optimization service on , if someone knows how to get ACPI events from asus without that - let me know
+    public double GetCpuPackagePowerWatts()
+    {
+        double power = _omen?.GetCpuPackagePowerWatts() ?? 0.0;
+        Logger.WriteLine($"[TelemetryTrace] AsusACPI.GetCpuPackagePowerWatts returning {power:F2}W (Omen is null? {_omen == null})");
+        return power;
+    }
+
     public void RunListener()
     {
 
@@ -245,7 +933,6 @@ public class AsusACPI
 
         byte[] outBuffer = new byte[16];
         byte[] data = new byte[8];
-        bool result;
 
         data[0] = BitConverter.GetBytes(eventHandle.ToInt32())[0];
         data[1] = BitConverter.GetBytes(eventHandle.ToInt32())[1];
@@ -264,11 +951,13 @@ public class AsusACPI
 
     public bool IsConnected()
     {
-        return _connected;
+        return _connected || _omen?.IsAvailable == true;
     }
 
     public AsusACPI()
     {
+        _omen = OmenBackend.TryCreate();
+
         try
         {
             handle = CreateFile(
@@ -291,31 +980,22 @@ public class AsusACPI
             Logger.WriteLine($"Can't connect to ACPI: {ex.Message}");
         }
 
-        if (AppConfig.IsAdvantageEdition())
-        {
-            MaxTotal = 250;
-        }
+        // MaxTotal is now set dynamically from MSR 0x614 in OmenBackend constructor.
+        // Device-specific MaxTotal overrides removed — the CPU itself reports its max.
 
         if (AppConfig.IsG14AMD())
         {
             DefaultTotal = 125;
         }
 
-        if (AppConfig.IsX13())
-        {
-            MaxTotal = 75;
-            DefaultTotal = 50;
-        }
-
         if (AppConfig.IsAlly())
         {
-            MaxTotal = 50;
             DefaultTotal = 30;
         }
 
-        if (AppConfig.IsIntelHX())
+        if (AppConfig.IsX13())
         {
-            MaxTotal = 175;
+            DefaultTotal = 50;
         }
 
         if (AppConfig.DynamicBoost5())
@@ -331,22 +1011,6 @@ public class AsusACPI
         if (AppConfig.DynamicBoost20())
         {
             MaxGPUBoost = 20;
-        }
-
-        if (AppConfig.IsCPULight())
-        {
-            MaxTotal = 90;
-        }
-
-        if (AppConfig.IsZ1325())
-        {
-            MaxTotal = 93;
-        }
-
-        if (AppConfig.IsOnlyAIMAX())
-        {
-            MaxTotal = 115;
-            MaxCPU = 115;
         }
 
     }
@@ -369,6 +1033,7 @@ public class AsusACPI
 
     public void Close()
     {
+        _omen?.Dispose(); // Dispose OMEN backend to clean up WMI/NVAPI resources
         CloseHandle(handle);
     }
 
@@ -406,6 +1071,9 @@ public class AsusACPI
 
     public int DeviceSet(uint DeviceID, int Status, string? logName)
     {
+        if (_omen?.TryDeviceSet(DeviceID, Status, logName, out int omenResult) == true)
+            return omenResult;
+
         byte[] args = new byte[8];
         BitConverter.GetBytes((uint)DeviceID).CopyTo(args, 0);
         BitConverter.GetBytes((uint)Status).CopyTo(args, 4);
@@ -422,6 +1090,9 @@ public class AsusACPI
 
     public int DeviceSet(uint DeviceID, byte[] Params, string? logName)
     {
+        if (_omen?.TryDeviceSet(DeviceID, Params, logName, out int omenResult) == true)
+            return omenResult;
+
         byte[] args = new byte[4 + Params.Length];
         BitConverter.GetBytes((uint)DeviceID).CopyTo(args, 0);
         Params.CopyTo(args, 4);
@@ -438,6 +1109,9 @@ public class AsusACPI
 
     public int DeviceGet(uint DeviceID)
     {
+        if (_omen?.TryDeviceGet(DeviceID, out int omenResult) == true)
+            return omenResult;
+
         byte[] args = new byte[8];
         BitConverter.GetBytes((uint)DeviceID).CopyTo(args, 0);
         byte[] status = CallMethod(DSTS, args);
@@ -448,6 +1122,9 @@ public class AsusACPI
 
     public byte[] DeviceGetBuffer(uint DeviceID, uint Status = 0)
     {
+        if (_omen?.TryDeviceGetBuffer(DeviceID, Status, out byte[]? omenResult) == true && omenResult != null)
+            return omenResult;
+
         byte[] args = new byte[8];
         BitConverter.GetBytes((uint)DeviceID).CopyTo(args, 0);
         BitConverter.GetBytes((uint)Status).CopyTo(args, 4);
@@ -458,6 +1135,9 @@ public class AsusACPI
 
     public decimal? GetBatteryDischarge()
     {
+        if (_omen?.TryGetBatteryDischarge(out decimal? omenDischarge) == true)
+            return omenDischarge;
+
         var buffer = DeviceGetBuffer(BatteryDischarge);
 
         if (buffer[2] > 0)
@@ -481,6 +1161,10 @@ public class AsusACPI
 
     public int SetGPUEco(int eco)
     {
+        // OMEN path: bypass the eco-flag roundtrip; switch GPU mode directly
+        if (_omen?.TrySetGpuEco(eco, out int omenResult) == true)
+            return omenResult;
+
         uint ecoEndpoint = GPUEco;
 
         int ecoFlag = DeviceGet(ecoEndpoint);
@@ -497,6 +1181,9 @@ public class AsusACPI
 
     public int GetFan(AsusFan device)
     {
+        if (_omen?.TryGetFan(device, out int omenFan) == true)
+            return omenFan;
+
         int fan = -1;
 
         switch (device)
@@ -523,11 +1210,14 @@ public class AsusACPI
 
     public bool IsMidFanSupported()
     {
+        if (_omen?.IsAvailable == true) return false;
         return IsSupported(Mid_Fan);
     }
 
     public int SetFanRange(AsusFan device, byte[] curve)
     {
+        if (_omen?.IsAvailable == true)
+            return SetFanCurve(device, curve);
 
         if (curve.Length != 16) return -1;
         if (curve.All(singleByte => singleByte == 0)) return -1;
@@ -553,6 +1243,8 @@ public class AsusACPI
 
     public int SetFanCurve(AsusFan device, byte[] curve)
     {
+        if (_omen?.TrySetFanCurve(device, curve, out int omenResult) == true)
+            return omenResult;
 
         if (curve.Length != 16) return -1;
         if (curve.All(singleByte => singleByte == 0)) return -1;
@@ -583,6 +1275,9 @@ public class AsusACPI
 
     public byte[] GetFanCurve(AsusFan device, int mode = 0)
     {
+        if (_omen?.TryGetFanCurve(device, mode, out byte[]? omenCurve) == true && omenCurve != null)
+            return omenCurve;
+
         uint fan_mode;
 
         // because it's asus, and modes are swapped here
@@ -626,6 +1321,8 @@ public class AsusACPI
 
     public (int up, int down) GetFanHysteresis()
     {
+        if (_omen?.IsAvailable == true) return (-1, -1);
+
         int value = DeviceGet(FanHysteresis);
         if (value < 0)
         {
@@ -640,6 +1337,8 @@ public class AsusACPI
 
     public int SetFanHysteresis(int up, int down)
     {
+        if (_omen?.IsAvailable == true) return -1;
+
         int result = -1;
         int value = (down << 8) | up;
 
@@ -713,11 +1412,13 @@ public class AsusACPI
 
     public bool IsXGConnected()
     {
+        if (_omen?.IsAvailable == true) return false;
         return DeviceGet(GPUXGConnected) == 1;
     }
 
     public bool IsAllAmdPPT()
     {
+        if (_omen?.IsAvailable == true) return false;
         if (_allAMD is null) _allAMD = IsSupported(PPT_CPUB0) && !IsSupported(PPT_GPUC0) && !AppConfig.IsAMDiGPU();
         return (bool)_allAMD;
     }
@@ -729,6 +1430,9 @@ public class AsusACPI
 
     public bool IsSupported(uint DeviceID)
     {
+        if (_omen?.TryIsSupported(DeviceID, out bool omenSupported) == true)
+            return omenSupported;
+
         if (!_supportCache.TryGetValue(DeviceID, out bool supported))
         {
             supported = DeviceGet(DeviceID) >= 0;
@@ -739,6 +1443,7 @@ public class AsusACPI
 
     public bool IsNVidiaGPU()
     {
+        if (_omen?.IsAvailable == true) return true;
         return (!IsAllAmdPPT() && IsSupported(GPUEco) && !AppConfig.IsAlly());
     }
 
@@ -912,7 +1617,30 @@ public class AsusACPI
         if (AppConfig.IsVivoZenPro() && IsSupported(KBD_BACKLIGHT_OOBE)) DeviceSet(KBD_BACKLIGHT_OOBE, 1, "VIVO OOBE");
     }
 
+    public bool IsOmen() => _omen?.IsAvailable == true;
+
+    public bool HasOmenPerKeyRgb()
+    {
+        return _omen?.HasPerKeyRgb() == true;
+    }
+
+    public void SetOmenColor(System.Drawing.Color color)
+    {
+        _omen?.SetColor(color);
+    }
+
+    public bool VerifyCpuPowerLimitsWriteable()
+    {
+        if (_omen != null)
+        {
+            return _omen.VerifyCpuPowerLimitsWriteable();
+        }
+
+        return IsSupported(PPT_APUA0) || CpuInfo.IsAMD;
+    }
+
     private ManagementEventWatcher? watcher;
+    private ManagementEventWatcher? omenWatcher;
 
     public void SubscribeToEvents(Action<object, EventArrivedEventArgs> EventHandler)
     {
@@ -927,6 +1655,55 @@ public class AsusACPI
         catch
         {
             Logger.WriteLine("Can't connect to ASUS WMI events");
+        }
+    }
+
+    public void SubscribeToOmenEvents()
+    {
+        try
+        {
+            if (omenWatcher != null) return;
+
+            Logger.WriteLine("Starting OMEN WMI listener...");
+            
+            ManagementScope scope = new ManagementScope(@"root\wmi");
+            scope.Connect();
+            
+            WqlEventQuery query = new WqlEventQuery("SELECT * FROM hpqBEvnt");
+            
+            omenWatcher = new ManagementEventWatcher(scope, query);
+            omenWatcher.EventArrived += (sender, e) =>
+            {
+                try
+                {
+                    int eventId = Convert.ToInt32(e.NewEvent["eventId"]);
+                    int eventData = Convert.ToInt32(e.NewEvent["eventData"]);
+
+                    Logger.WriteLine($"OMEN WMI Event: {eventId}, {eventData}");
+
+                    if (eventId == 29 && (eventData == 8613 || eventData == 8614))
+                    {
+                        Logger.WriteLine("OMEN Key Detected! Toggling settings...");
+                        Program.toast.RunToast("OMEN Key", ToastIcon.BrightnessUp);
+                        
+                        Program.settingsForm.BeginInvoke(delegate
+                        {
+                            Program.SettingsToggle();
+                        });
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.WriteLine("Error in OMEN event handler: " + ex.Message);
+                }
+            };
+            
+            omenWatcher.Start();
+            Logger.WriteLine("✓ OMEN WMI listener active");
+        }
+        catch (Exception ex)
+        {
+            Logger.WriteLine("Failed to start OMEN WMI events: " + ex.Message);
         }
     }
 

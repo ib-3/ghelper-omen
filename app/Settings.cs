@@ -1,4 +1,4 @@
-﻿using GHelper.Ally;
+using GHelper.Ally;
 using GHelper.AnimeMatrix;
 using GHelper.AutoUpdate;
 using GHelper.Battery;
@@ -1170,6 +1170,19 @@ namespace GHelper
 
         private void ButtonKeyboardColor_Click(object? sender, EventArgs e)
         {
+            if (AppConfig.IsDynamicLighting() || Program.acpi.HasOmenPerKeyRgb())
+            {
+                try
+                {
+                    System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ms-settings:personalization-dynamiclighting") { UseShellExecute = true });
+                }
+                catch (Exception ex)
+                {
+                    Logger.WriteLine("Failed to open Dynamic Lighting settings: " + ex.Message);
+                }
+                return;
+            }
+
             SetColorPicker("aura_color");
         }
 
@@ -1219,7 +1232,7 @@ namespace GHelper
             Aura.SetColor2(AppConfig.Get("aura_color2"));
 
             comboKeyboard.DropDownStyle = ComboBoxStyle.DropDownList;
-            if (!Aura.IsBacklightDetected && !AppConfig.Is("skip_aura"))
+            if (!Aura.IsBacklightDetected && !AppConfig.Is("skip_aura") && !AppConfig.IsDynamicLightingOnly())
                 Aura.Init();
 
             comboKeyboard.DataSource = new BindingSource(Aura.GetModes(), null);
@@ -1234,7 +1247,7 @@ namespace GHelper
                 panelColor.Visible = false;
             }
 
-            if (AppConfig.NoAura())
+            if (AppConfig.NoAura() && !AppConfig.IsDynamicLightingOnly())
             {
                 comboKeyboard.Visible = false;
             }
@@ -1621,6 +1634,12 @@ namespace GHelper
             string trayTip = "CPU" + cpuTemp + " " + HardwareControl.cpuFan;
             if (gpuTemp.Length > 0) trayTip += "\nGPU" + gpuTemp + " " + HardwareControl.gpuFan;
             if (battery.Length > 0) trayTip += "\n" + battery;
+
+            double pkgPower = Program.acpi?.GetCpuPackagePowerWatts() ?? 0.0;
+            if (fansForm != null && !fansForm.IsDisposed && fansForm.Text != "")
+            {
+                fansForm.UpdateLiveCpuPower(pkgPower);
+            }
 
             if (Program.settingsForm.IsHandleCreated)
                 Program.settingsForm.BeginInvoke(delegate

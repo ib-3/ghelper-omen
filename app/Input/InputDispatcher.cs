@@ -5,6 +5,7 @@ using GHelper.USB;
 using Microsoft.Win32;
 using System.Diagnostics;
 using System.Management;
+using System.Runtime.InteropServices;
 using System.Text.RegularExpressions;
 
 namespace GHelper.Input
@@ -48,6 +49,8 @@ namespace GHelper.Input
             Debug.WriteLine($"Init: {BitConverter.ToString(result)}");
 
             Program.acpi.SubscribeToEvents(WatcherEventArrived);
+            Program.acpi.SubscribeToOmenEvents();
+
             //Task.Run(Program.acpi.RunListener);
 
             hook.KeyPressed += new EventHandler<KeyPressedEventArgs>(KeyPressed);
@@ -142,6 +145,10 @@ namespace GHelper.Input
         public void RegisterKeys()
         {
             hook.UnregisterAll();
+            
+            // Start low-level hook for OMEN key
+            StartOmenHook();
+
 
             string actionM1 = AppConfig.GetString("m1");
             string actionM2 = AppConfig.GetString("m2");
@@ -210,6 +217,10 @@ namespace GHelper.Input
                 hook.RegisterHotKey(ModifierKeys.None, Keys.Up);
                 hook.RegisterHotKey(ModifierKeys.None, Keys.Down);
             }
+
+            hook.RegisterHotKey(ModifierKeys.None, Keys.LaunchApplication2);
+            hook.RegisterHotKey(ModifierKeys.None, Keys.F24);
+            hook.RegisterHotKey(ModifierKeys.None, (Keys)0x9D);
 
         }
 
@@ -313,6 +324,13 @@ namespace GHelper.Input
         {
 
             Logger.WriteLine(e.Key.ToString() + " " + e.Modifier.ToString());
+
+            if (e.Key == Keys.LaunchApplication2 || e.Key == Keys.F24 || (int)e.Key == 0x9D)
+            {
+                HandleEvent(56);
+                return;
+            }
+
 
             if (e.Modifier == ModifierKeys.None)
             {
@@ -554,14 +572,14 @@ namespace GHelper.Input
 
             if (action is null || action.Length <= 1)
             {
-                if (name == "m4")
-                    action = "ghelper";
+                if (name == "m4" && !AsusService.IsAsusOptimizationRunning())
+                    action = "micmute";
                 if (name == "fnf4")
                     action = "aura";
                 if (name == "fnf5")
                     action = "performance";
-                if (name == "m3" && !AsusService.IsAsusOptimizationRunning())
-                    action = "micmute";
+                if (name == "m3")
+                    action = "ghelper";
                 if (name == "fnc")
                     action = "fnlock";
                 if (name == "fnv")
@@ -1311,5 +1329,58 @@ namespace GHelper.Input
 
             HandleEvent(EventID);
         }
+
+
+
+        #region Low Level Keyboard Hook for OMEN
+
+        private static IntPtr _hookHandle = IntPtr.Zero;
+        private static NativeMethods.LowLevelKeyboardProc _hookProc = HookCallback;
+
+        public static void StartOmenHook()
+        {
+            if (_hookHandle != IntPtr.Zero) return;
+
+            using (Process curProcess = Process.GetCurrentProcess())
+            using (ProcessModule curModule = curProcess.MainModule!)
+            {
+                _hookHandle = NativeMethods.SetWindowsHookEx(13, // WH_KEYBOARD_LL
+                    _hookProc, NativeMethods.GetModuleHandle(curModule.ModuleName), 0);
+            }
+
+            if (_hookHandle != IntPtr.Zero)
+                Logger.WriteLine("Low-level keyboard hook active for OMEN key");
+            else
+                Logger.WriteLine("Failed to set low-level keyboard hook");
+        }
+
+        private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)
+        {
+            if (nCode >= 0 && (wParam == (IntPtr)0x0100 || wParam == (IntPtr)0x0104)) // WM_KEYDOWN or WM_SYSKEYDOWN
+            {
+                int vkCode = Marshal.ReadInt32(lParam);
+                int scanCode = Marshal.ReadInt32(lParam, 8);
+
+                // OMEN key common codes: 0xB7 (LaunchApp2), 0x87 (F24), 0x9D (OEM)
+                if (vkCode == 0xB7 || vkCode == 0x87 || vkCode == 0x9D)
+                {
+                    Logger.WriteLine($"OMEN Key Hook: VK={vkCode:X2}, Scan={scanCode:X4}");
+                    
+                    Program.toast.RunToast("OMEN Key", ToastIcon.BrightnessUp);
+                    Program.settingsForm.BeginInvoke(delegate
+                    {
+                        Program.SettingsToggle();
+                    });
+                    
+                    return (IntPtr)1; // Consume the key so OMEN Gaming Hub doesn't open
+                }
+            }
+
+            return NativeMethods.CallNextHookEx(_hookHandle, nCode, wParam, lParam);
+        }
+
+        #endregion
+
     }
 }
+

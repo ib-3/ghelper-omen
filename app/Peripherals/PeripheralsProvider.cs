@@ -1,4 +1,4 @@
-﻿using GHelper.Peripherals.Mouse;
+using GHelper.Peripherals.Mouse;
 using GHelper.Peripherals.Mouse.Models;
 using HidSharp;
 using System.Runtime.CompilerServices;

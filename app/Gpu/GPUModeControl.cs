@@ -1,4 +1,4 @@
-﻿using GHelper.Display;
+using GHelper.Display;
 using GHelper.Gpu.NVidia;
 using GHelper.Helpers;
 using GHelper.USB;
@@ -43,8 +43,13 @@ namespace GHelper.Gpu
             {
                 if (eco == 1)
                     gpuMode = AsusACPI.GPUModeEco;
-                else
+                else if (eco == 0)
                     gpuMode = AsusACPI.GPUModeStandard;
+                // eco < 0: BIOS doesn't support GPU eco switching (OMEN devices).
+                // Preserve the stored AppConfig value instead of blindly overwriting with
+                // GPUModeStandard, which would clear an intentional eco/optimus state.
+                else
+                    gpuMode = AppConfig.Get("gpu_mode");
 
                 // GPU mode not supported
                 if (eco < 0 && mux < 0)
@@ -55,6 +60,7 @@ namespace GHelper.Gpu
             }
 
             AppConfig.Set("gpu_mode", gpuMode);
+
             settings.VisualiseGPUMode(gpuMode);
 
             Aura.CustomRGB.ApplyGPUColor(gpuMode);

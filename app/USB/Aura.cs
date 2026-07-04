@@ -1,4 +1,4 @@
-﻿using GHelper.Gpu;
+using GHelper.Gpu;
 using GHelper.Helpers;
 using GHelper.Input;
 using GHelper.Peripherals;
@@ -908,6 +908,13 @@ namespace GHelper.USB
             int _speed = (effectiveSpeed == AuraSpeed.Normal) ? 0xeb : (effectiveSpeed == AuraSpeed.Fast) ? 0xf5 : 0xe1;
 
             PeripheralsProvider.SyncMiceWithKeyboardAura();
+
+            if (Program.acpi.IsOmen() && !Program.acpi.HasOmenPerKeyRgb())
+            {
+                Program.acpi.SetOmenColor(_Color1);
+                ApplyRearLight();
+                return;
+            }
 
             AsusHid.Write(new List<byte[]> { AuraMessage(Mode, _Color1, _Color2, _speed), MESSAGE_SET, MESSAGE_APPLY }, "Aura", AsusHid.MAIN_AURA_PIDS);
             XGM.LightMode(Mode, _Color1, _Color2, _speed);

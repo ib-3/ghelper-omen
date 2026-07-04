@@ -1,4 +1,4 @@
-﻿using GHelper.Properties;
+using GHelper.Properties;
 using GHelper.UI;
 
 namespace GHelper
@@ -121,6 +121,7 @@ namespace GHelper
             checkNVPlatform = new CheckBox();
             checkStatusLed = new CheckBox();
             checkAspm = new CheckBox();
+            checkDonate = new CheckBox();
             panelPower = new Panel();
             numericHibernateAfter = new NumericUpDownWithUnit();
             labelHibernateAfter = new Label();
@@ -1203,6 +1204,7 @@ namespace GHelper
             panelSettings.Controls.Add(checkNVPlatform);
             panelSettings.Controls.Add(checkStatusLed);
             panelSettings.Controls.Add(checkAspm);
+            panelSettings.Controls.Add(checkDonate);
             panelSettings.Dock = DockStyle.Top;
             panelSettings.Location = new Point(15, 1252);
             panelSettings.Name = "panelSettings";
@@ -1300,6 +1302,18 @@ namespace GHelper
             checkGpuApps.TabIndex = 2;
             checkGpuApps.Text = "Stop all apps using GPU when switching to Eco";
             checkGpuApps.UseVisualStyleBackColor = true;
+            // checkDonate
+            // 
+            checkDonate.AutoSize = true;
+            checkDonate.Dock = DockStyle.Top;
+            checkDonate.Location = new Point(21, 200);
+            checkDonate.Margin = new Padding(5, 3, 5, 3);
+            checkDonate.Name = "checkDonate";
+            checkDonate.Padding = new Padding(3);
+            checkDonate.Size = new Size(917, 42);
+            checkDonate.TabIndex = 3;
+            checkDonate.Text = "Show Thank You / Donate Button";
+            checkDonate.UseVisualStyleBackColor = true;
             //
             // checkNVPlatform
             // 
@@ -1798,6 +1812,7 @@ namespace GHelper
         private CheckBox checkNoOverdrive;
         private CheckBox checkUSBC;
         private CheckBox checkGpuApps;
+        private CheckBox checkDonate;
         private PictureBox pictureBacklight;
         private Label labelBacklightTitle;
         private PictureBox pictureService;

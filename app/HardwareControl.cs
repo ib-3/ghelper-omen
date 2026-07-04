@@ -14,6 +14,17 @@ public static class HardwareControl
 
     public static IGpuControl? GpuControl;
 
+    public static bool IsEcoMode()
+    {
+        // Primary: stored preference in AppConfig
+        if (AppConfig.Get("gpu_mode") == AsusACPI.GPUModeEco) return true;
+        // Fallback: live BIOS GPUEco register (covers cases where AppConfig hasn't been
+        // written yet on this boot, e.g. the first call in Program.cs before InitGPUMode runs)
+        try { return Program.acpi?.DeviceGet(AsusACPI.GPUEco) == 1; }
+        catch { return false; }
+    }
+
+
     public static float? cpuTemp = -1;
     public static float? gpuTemp = -1;
 
@@ -281,6 +292,8 @@ public static class HardwareControl
 
     private static int GetGpuUse()
     {
+        if (IsEcoMode()) return 0;
+
         try
         {
             int? gpuUse = GpuControl?.GetGpuUse();
@@ -420,22 +433,67 @@ public static class HardwareControl
         if (Math.Abs(last - lastUpdate) < 2) return cpuTemp;
         lastUpdate = last;
 
-        if (isPZ13) return (float)GetCPUTempWMI();
-        cpuTemp = Program.acpi.DeviceGet(AsusACPI.Temp_CPU);
+        if (isPZ13)
+        {
+            var pzTemp = (float)GetCPUTempWMI();
+            Logger.WriteLine($"[GetCPUTemp] Source: PZ13 WMI → {pzTemp}°C");
+            return pzTemp;
+        }
 
-        if (cpuTemp < 0) try
+        // 1. Primary: WMI/OMEN path (LibreHardwareMonitor → HP WMI BIOS → ACPI)
+        //    This is the accurate CPU package/core temperature source on HP Omen laptops.
+        cpuTemp = Program.acpi.DeviceGet(AsusACPI.Temp_CPU);
+        string source = "OmenBackend.DeviceGet(Temp_CPU)";
+
+        // 2. Last-resort fallback: dynamic Performance Counter discovery.
+        //    Only used when the primary WMI path returns nothing valid.
+        //    NOTE: Performance Counters on HP Omen often report a generic/ambient zone
+        //    rather than the actual CPU package, so this is intentionally a fallback only.
+        if (cpuTemp == null || cpuTemp <= 0) try
         {
             if (_cpuTempCounter == null)
-                _cpuTempCounter = new PerformanceCounter("Thermal Zone Information", "Temperature", @"\_TZ.THRM", true);
+            {
+                string instanceName = @"\_TZ.THRM"; // default fallback
+                try
+                {
+                    var category = new PerformanceCounterCategory("Thermal Zone Information");
+                    string[] instances = category.GetInstanceNames();
+                    Logger.WriteLine($"[GetCPUTemp] PerfCounter instances found: [{string.Join(", ", instances)}]");
+                    if (instances.Length > 0)
+                    {
+                        // Prefer instances containing "THRM", "TZ", or "CPU"
+                        string? bestInstance = null;
+                        foreach (string inst in instances)
+                        {
+                            if (inst.Contains("THRM", StringComparison.OrdinalIgnoreCase) ||
+                                inst.Contains("TZ", StringComparison.OrdinalIgnoreCase) ||
+                                inst.Contains("CPU", StringComparison.OrdinalIgnoreCase))
+                            {
+                                bestInstance = inst;
+                                break;
+                            }
+                        }
+                        instanceName = bestInstance ?? instances[0];
+                    }
+                }
+                catch (Exception ex)
+                {
+                    Logger.WriteLine("Failed to dynamically find Thermal Zone instances: " + ex.Message);
+                }
+
+                _cpuTempCounter = new PerformanceCounter("Thermal Zone Information", "Temperature", instanceName, true);
+                Logger.WriteLine($"[GetCPUTemp] PerfCounter using instance: '{instanceName}'");
+            }
 
             cpuTemp = _cpuTempCounter.NextValue() - 273;
+            source = $"PerfCounter(fallback)";
         }
-        catch (Exception ex)
+        catch (Exception)
         {
-            //Debug.WriteLine("Failed reading CPU temp :" + ex.Message);
+            //Debug.WriteLine("Failed reading CPU temp via Performance Counter: " + ex.Message);
         }
 
-
+        Logger.WriteLine($"[GetCPUTemp] RESULT: {cpuTemp}°C via {source}");
         return cpuTemp;
     }
 
@@ -457,7 +515,7 @@ public static class HardwareControl
                 }
             }
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             //Logger.WriteLine("Error retrieving temperature: " + ex.Message);
         }
@@ -466,12 +524,14 @@ public static class HardwareControl
 
     public static float? GetGPUTemp()
     {
+        if (IsEcoMode()) return null;
+
         try
         {
             gpuTemp = GpuControl?.GetCurrentTemperature();
 
         }
-        catch (Exception ex)
+        catch (Exception)
         {
             gpuTemp = -1;
             //Debug.WriteLine("Failed reading GPU temp :" + ex.Message);
@@ -501,6 +561,14 @@ public static class HardwareControl
         gpuTemp = GetGPUTemp();
 
         if (log) Logger.WriteLine($"Temps: {cpuTemp} {gpuTemp} {cpuFan} {gpuFan} {midFan}");
+
+        // [TEMPERATURE FIX 2026-05-29] Evaluate OMEN fan curves dynamically in software
+        // since the OMEN firmware lacks hardware evaluation for custom curves.
+        if (Program.acpi.IsOmen() && AppConfig.IsApplyFans())
+        {
+            Program.acpi.SetFanCurve(AsusFan.CPU, AppConfig.GetFanConfig(AsusFan.CPU));
+            Program.acpi.SetFanCurve(AsusFan.GPU, AppConfig.GetFanConfig(AsusFan.GPU));
+        }
 
         ReadBatteryState();
     }
@@ -560,7 +628,7 @@ public static class HardwareControl
 
     public static void RecreateGpuControl()
     {
-        if (AppConfig.NoGpu()) return;
+        if (AppConfig.NoGpu() || IsEcoMode()) return;
         try
         {
             GpuControl?.Dispose();

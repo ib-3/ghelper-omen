@@ -149,6 +149,9 @@ public static class AppConfig
     public static bool ContainsModel(string contains)
         => _model.Value.Contains(contains, StringComparison.OrdinalIgnoreCase);
 
+    public static bool IsOmen()
+        => ContainsModel("OMEN") || ContainsModel("Victus") || ContainsModel("THETIGER");
+
     private static void Init()
     {
         config = new Dictionary<string, object>();
@@ -397,7 +400,7 @@ public static class AppConfig
     // G14 2020 has no aura, but media keys instead
     public static bool NoAura()
     {
-        return (ContainsModel("GA401I") && !ContainsModel("GA401IHR")) || ContainsModel("GA502IU") || ContainsModel("HN7306") || ContainsModel("M6500X");
+        return IsOmen() || (ContainsModel("GA401I") && !ContainsModel("GA401IHR")) || ContainsModel("GA502IU") || ContainsModel("HN7306") || ContainsModel("M6500X");
     }
 
     public static bool MediaKeys()
@@ -665,12 +668,12 @@ public static class AppConfig
     // 2024 Models support Dynamic Lighting
     public static bool IsDynamicLighting()
     {
-        return IsSlash() || IsIntelHX() || IsTUF() || IsZ13();
+        return IsOmen() || IsSlash() || IsIntelHX() || IsTUF() || IsZ13() || IsDynamicLightingOnly() || Is("dynamic_lighting");
     }
 
     public static bool IsDynamicLightingOnly()
     {
-        return ContainsModel("S560") || ContainsModel("M540") || ContainsModel("UX760");
+        return IsOmen() || ContainsModel("S560") || ContainsModel("M540") || ContainsModel("UX760") || Is("dynamic_lighting_only");
     }
 
     public static bool IsDynamicLightingInit()

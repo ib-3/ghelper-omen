@@ -21,6 +21,11 @@ public class NvidiaGpuControl : IGpuControl
     public static int MinClockLimit = AppConfig.Get("min_gpu_clock", 400);
     public const int MaxClockLimit = 3000;
 
+    public int MinPowerDrawWatts { get; private set; }
+    public int CurrentPowerDrawWatts { get; private set; }
+    public int DefaultPowerDrawWatts { get; private set; }
+    public int MaxPowerDrawWatts { get; private set; }
+
     private static PhysicalGPU? _internalGpu;
 
     public NvidiaGpuControl()
@@ -28,6 +33,8 @@ public class NvidiaGpuControl : IGpuControl
         _internalGpu = GetInternalDiscreteGpu();
         if (IsValid)
         {
+            RefreshPowerDrawLimits();
+
             if (FullName.Contains("5080") || FullName.Contains("5090"))
             {
                 MaxCoreOffset = AppConfig.Get("max_gpu_core", 400);
@@ -268,6 +275,31 @@ public class NvidiaGpuControl : IGpuControl
         return 1;
 
 
+    }
+
+    public bool RefreshPowerDrawLimits()
+    {
+        var limits = NvidiaSmi.GetPowerLimits();
+        if (!limits.HasValue) return false;
+
+        MinPowerDrawWatts = limits.Value.Minimum;
+        CurrentPowerDrawWatts = limits.Value.Current;
+        DefaultPowerDrawWatts = limits.Value.Default;
+        MaxPowerDrawWatts = limits.Value.Maximum;
+
+        Logger.WriteLine($"NVIDIA Power Draw: min={MinPowerDrawWatts}W current={CurrentPowerDrawWatts}W default={DefaultPowerDrawWatts}W max={MaxPowerDrawWatts}W");
+        return MaxPowerDrawWatts > MinPowerDrawWatts;
+    }
+
+    public int SetPowerLimitWatts(int watts)
+    {
+        if (!IsValid) return 0;
+        if (!RefreshPowerDrawLimits()) return 0;
+
+        watts = Math.Clamp(watts, MinPowerDrawWatts, MaxPowerDrawWatts);
+        if (Math.Abs(CurrentPowerDrawWatts - watts) < 1) return 0;
+
+        return NvidiaSmi.SetPowerLimit(watts) ? 1 : -1;
     }
 
     public static void FixNvContainer()

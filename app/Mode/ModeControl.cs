@@ -2,6 +2,9 @@ using GHelper.Gpu.NVidia;
 using GHelper.Helpers;
 using GHelper.USB;
 using PawnIO;
+using OmenCore.Hardware;
+using OmenCore.Models;
+using System.Threading;
 
 namespace GHelper.Mode
 {
@@ -50,12 +53,12 @@ namespace GHelper.Mode
 
         public ModeControl()
         {
-            int reapplyTime = AppConfig.Get("reapply_time", 0);
-            if (reapplyTime > 0)
-            {
-                reapplyTimer = new System.Timers.Timer(reapplyTime * 1000);
-                reapplyTimer.Elapsed += ReapplyTimer_Elapsed;
-            }
+            // Aggressive 3-second reapply timer to counteract HP EC and Intel DTT overrides
+            reapplyTimer = new System.Timers.Timer(3000);
+            reapplyTimer.Elapsed += ReapplyTimer_Elapsed;
+            
+            // Check if we need to start it immediately based on saved preferences
+            SetReapplyEnabled(AppConfig.IsApplyUV() || AppConfig.IsApplyPower());
         }
 
         private static void SetReapplyEnabled(bool enabled)
@@ -63,11 +66,15 @@ namespace GHelper.Mode
             if (reapplyTimer != null) reapplyTimer.Enabled = enabled;
         }
 
-
         private void ReapplyTimer_Elapsed(object? sender, System.Timers.ElapsedEventArgs e)
         {
-            SetCPUTemp(AppConfig.GetMode("cpu_temp"));
-            SetRyzenPower();
+            // Periodically re-apply power limits and undervolt to prevent OEM firmware from resetting them
+            if (AppConfig.IsApplyPower()) SetPower();
+            if (AppConfig.IsApplyUV())
+            {
+                SetCPUTemp(AppConfig.GetMode("cpu_temp"));
+                SetRyzenPower(); // Note: SetRyzenPower handles undervolt
+            }
         }
 
         public void AutoPerformance(bool powerChanged = false)
@@ -89,9 +96,9 @@ namespace GHelper.Mode
 
             Program.acpi.DeviceSet(AsusACPI.PerformanceMode, Modes.GetCurrentBase(), "Mode");
 
-            // Default power mode
+            // Default power mode tracking
             AppConfig.RemoveMode("powermode");
-            PowerNative.SetPowerMode(Modes.GetCurrentBase());
+            // PowerNative.SetPowerMode(Modes.GetCurrentBase()); // DISABLED: don't change Windows power plan
         }
 
         public void Toast()
@@ -166,11 +173,12 @@ namespace GHelper.Mode
 
             if (!AppConfig.Is("skip_powermode"))
             {
-                // Windows power mode
-                if (AppConfig.GetModeString("powermode") is not null)
-                    PowerNative.SetPowerMode(AppConfig.GetModeString("powermode"));
-                else
-                    PowerNative.SetPowerMode(Modes.GetBase(mode));
+                // Windows power plan changes DISABLED — Omen profiles should only
+                // affect Omen EC settings, not Windows power plan.
+                // if (AppConfig.GetModeString("powermode") is not null)
+                //     PowerNative.SetPowerMode(AppConfig.GetModeString("powermode"));
+                // else
+                //     PowerNative.SetPowerMode(Modes.GetBase(mode));
 
                 if (AppConfig.IsAutoASPM()) PowerNative.SetBalancedASPM();
             }
@@ -178,6 +186,10 @@ namespace GHelper.Mode
             // CPU Boost setting override
             if (AppConfig.GetMode("auto_boost") != -1)
                     PowerNative.SetCPUBoost(AppConfig.GetMode("auto_boost"));
+
+            // EPP setting override
+            if (AppConfig.GetMode("epp") != -1)
+                    PowerNative.SetEPP(AppConfig.GetMode("epp"));
 
             settings.FansInit();
         }
@@ -457,11 +469,15 @@ namespace GHelper.Mode
 
             if (cpuUV >= CpuInfo.MinCPUUV && cpuUV <= CpuInfo.MaxCPUUV)
             {
-                var smu = GetSmu();
-                if (smu == null) return;
-                SmuStatus status = smu.SetCoAll(cpuUV);
-                Logger.WriteLine($"UV: {cpuUV} {status}");
-                if (status == SmuStatus.OK) _cpuUV = cpuUV;
+                var provider = CpuUndervoltProviderFactory.Create(out string backend);
+                var offset = new UndervoltOffset { CoreMv = CpuInfo.IsAMD ? cpuUV * 4 : cpuUV, CacheMv = _igpuUV * (CpuInfo.IsAMD ? 4 : 1) };
+                try {
+                    provider.ApplyOffsetAsync(offset, CancellationToken.None).Wait();
+                    _cpuUV = cpuUV;
+                    Logger.WriteLine($"UV: {cpuUV} ({backend})");
+                } catch (Exception ex) {
+                    Logger.WriteLine($"UV Error: {ex.Message}");
+                }
             }
         }
 
@@ -471,11 +487,15 @@ namespace GHelper.Mode
 
             if (igpuUV >= CpuInfo.MinIGPUUV && igpuUV <= CpuInfo.MaxIGPUUV)
             {
-                var smu = GetSmu();
-                if (smu == null) return;
-                SmuStatus status = smu.SetCoGfx(igpuUV);
-                Logger.WriteLine($"iGPU UV: {igpuUV} {status}");
-                if (status == SmuStatus.OK) _igpuUV = igpuUV;
+                var provider = CpuUndervoltProviderFactory.Create(out string backend);
+                var offset = new UndervoltOffset { CoreMv = _cpuUV * (CpuInfo.IsAMD ? 4 : 1), CacheMv = CpuInfo.IsAMD ? igpuUV * 4 : igpuUV };
+                try {
+                    provider.ApplyOffsetAsync(offset, CancellationToken.None).Wait();
+                    _igpuUV = igpuUV;
+                    Logger.WriteLine($"iGPU UV: {igpuUV} ({backend})");
+                } catch (Exception ex) {
+                    Logger.WriteLine($"iGPU UV Error: {ex.Message}");
+                }
             }
         }
 
@@ -487,9 +507,6 @@ namespace GHelper.Mode
                 return string.Empty;
             }
 
-            var smu = GetSmu();
-            if (smu == null) return string.Empty;
-
             var lines = new System.Text.StringBuilder();
             try
             {
@@ -497,20 +514,17 @@ namespace GHelper.Mode
                 int igpuUV  = AppConfig.GetMode("igpu_uv",  0);
                 int cpuTemp = AppConfig.GetMode("cpu_temp");
 
-                if (CpuInfo.IsSupportedUV() && cpuUV >= CpuInfo.MinCPUUV && cpuUV <= CpuInfo.MaxCPUUV)
-                {
-                    SmuStatus s = smu.SetCoAll(cpuUV);
-                    Logger.WriteLine($"UV: {cpuUV} {s}");
-                    if (s == SmuStatus.OK) _cpuUV = cpuUV;
-                    lines.AppendLine($"CPU UV {cpuUV}: {s}");
-                }
+                var provider = CpuUndervoltProviderFactory.Create(out string backend);
 
-                if (CpuInfo.IsSupportedUViGPU() && igpuUV >= CpuInfo.MinIGPUUV && igpuUV <= CpuInfo.MaxIGPUUV)
+                if ((CpuInfo.IsSupportedUV() && cpuUV >= CpuInfo.MinCPUUV && cpuUV <= CpuInfo.MaxCPUUV) ||
+                    (CpuInfo.IsSupportedUViGPU() && igpuUV >= CpuInfo.MinIGPUUV && igpuUV <= CpuInfo.MaxIGPUUV))
                 {
-                    SmuStatus s = smu.SetCoGfx(igpuUV);
-                    Logger.WriteLine($"iGPU UV: {igpuUV} {s}");
-                    if (s == SmuStatus.OK) _igpuUV = igpuUV;
-                    lines.AppendLine($"iGPU UV {igpuUV}: {s}");
+                    var offset = new UndervoltOffset { CoreMv = CpuInfo.IsAMD ? cpuUV * 4 : cpuUV, CacheMv = CpuInfo.IsAMD ? igpuUV * 4 : igpuUV };
+                    provider.ApplyOffsetAsync(offset, CancellationToken.None).Wait();
+                    _cpuUV = cpuUV;
+                    _igpuUV = igpuUV;
+                    Logger.WriteLine($"Applied UV: CPU {cpuUV}, iGPU {igpuUV} ({backend})");
+                    lines.AppendLine($"UV applied via {backend}");
                 }
 
                 SmuStatus? tempStatus = SetCPUTemp(cpuTemp, true);
@@ -519,9 +533,10 @@ namespace GHelper.Mode
             catch (Exception ex)
             {
                 Logger.WriteLine("UV Error: " + ex.ToString());
+                lines.AppendLine($"UV Error: {ex.Message}");
             }
 
-            SetReapplyEnabled(AppConfig.IsApplyUV());
+            SetReapplyEnabled(AppConfig.IsApplyUV() || AppConfig.IsApplyPower());
             return lines.ToString().TrimEnd();
         }
 

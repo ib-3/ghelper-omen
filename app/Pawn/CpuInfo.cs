@@ -36,14 +36,19 @@ namespace PawnIO
         public static int DefaultTemp=> AppConfig.Get("max_temp",     96);
 
         public static bool IsSupportedUV()
-            => Name.Contains("RYZEN AI MAX") ||
-               Name.Contains("Ryzen AI 9")   ||
-               Name.Contains("Ryzen 9")      ||
-               Name.Contains("4900H")        ||
-               Name.Contains("4800H")        ||
-               Name.Contains("4600H");
+        {
+            if (!IsAMD) return true; // Intel CPUs (mostly HX/HK on Omen) use MSR, let the backend handle validation
+            
+            return Name.Contains("RYZEN AI MAX", StringComparison.OrdinalIgnoreCase) ||
+                   Name.Contains("Ryzen AI 9", StringComparison.OrdinalIgnoreCase)   ||
+                   Name.Contains("Ryzen 9", StringComparison.OrdinalIgnoreCase)      ||
+                   Name.Contains("Ryzen 7", StringComparison.OrdinalIgnoreCase)      || // Allow Ryzen 7
+                   Name.Contains("4900H", StringComparison.OrdinalIgnoreCase)        ||
+                   Name.Contains("4800H", StringComparison.OrdinalIgnoreCase)        ||
+                   Name.Contains("4600H", StringComparison.OrdinalIgnoreCase);
+        }
 
-        public static bool IsSupportedUViGPU() => Name.Contains("6900H");
+        public static bool IsSupportedUViGPU() => true; // Let backend handle if iGPU UV is supported
 
         private static (string Name, string Caption) Load()
         {

@@ -1,4 +1,4 @@
-﻿using GHelper.UI;
+using GHelper.UI;
 using System.Diagnostics;
 using System.Management;
 using System.Net;
@@ -93,12 +93,40 @@ namespace GHelper
             _cts = new CancellationTokenSource();
             var token = _cts.Token;
 
-            _ = Task.Run(() => DriversAsync($"https://rog.asus.com/support/webapi/product/GetPDBIOS?website=global&model={model}&cpu={model}{rogParam}", 1, tableBios, token), token);
-            _ = Task.Run(() => DriversAsync($"https://rog.asus.com/support/webapi/product/GetPDDrivers?website=global&model={model}&cpu={model}&osid=52{rogParam}", 0, tableDrivers, token), token);
+            if (AppConfig.IsOmen())
+            {
+                _ = Task.Run(() => HPDriversAsync(tableBios, tableDrivers, token), token);
+            }
+            else
+            {
+                AddGenericBios(tableBios);
+                AddGenericDrivers(tableDrivers);
+            }
             _ = Task.Run(LaptopSerialNumber, token);
 
             textSerial.BackColor = panelBios.BackColor;
             textSerial.ForeColor = panelBios.ForeColor;
+        }
+
+        private void AddGenericDrivers(TableLayoutPanel table)
+        {
+            var nvidia = new DriverDownload { categoryName = "Graphics", title = "NVIDIA GeForce Drivers", version = "Latest", date = "Check Website", downloadUrl = "https://www.nvidia.com/download/index.aspx" };
+            var intel = new DriverDownload { categoryName = "Graphics", title = "Intel Arc & Iris Xe Graphics", version = "Latest", date = "Check Website", downloadUrl = "https://www.intel.com/content/www/us/en/download-center/home.html" };
+            var amdChipset = new DriverDownload { categoryName = "Chipset", title = "AMD Ryzen Chipset Drivers", version = "Latest", date = "Check Website", downloadUrl = "https://www.amd.com/en/support" };
+            var intelChipset = new DriverDownload { categoryName = "Chipset", title = "Intel Chipset Drivers", version = "Latest", date = "Check Website", downloadUrl = "https://www.intel.com/content/www/us/en/download-center/home.html" };
+
+            VisualiseDriver(nvidia, table);
+            VisualiseDriver(intel, table);
+            VisualiseDriver(amdChipset, table);
+            VisualiseDriver(intelChipset, table);
+            ShowTable(table);
+        }
+
+        private void AddGenericBios(TableLayoutPanel table)
+        {
+            var hp = new DriverDownload { categoryName = "System", title = "HP OMEN Official Drivers & BIOS", version = "Latest", date = "Check Website", downloadUrl = "https://support.hp.com/us-en/drivers/laptops" };
+            VisualiseDriver(hp, table);
+            ShowTable(table);
         }
 
         private void ClearTable(TableLayoutPanel tableLayoutPanel)
@@ -455,5 +483,420 @@ namespace GHelper
                 Logger.WriteLine(ex.ToString());
             }
         }
+
+        #region HP OMEN Drivers Integration
+
+        public class HPTypeaheadResponse
+        {
+            public List<HPTypeaheadMatch>? matches { get; set; }
+        }
+
+        public class HPTypeaheadMatch
+        {
+            public long productId { get; set; }
+            public string? productname { get; set; }
+        }
+
+        public class HPOSVersionResponse
+        {
+            public HPOSVersionData? data { get; set; }
+        }
+
+        public class HPOSVersionData
+        {
+            public List<HPOSVersionGroup>? osversions { get; set; }
+        }
+
+        public class HPOSVersionGroup
+        {
+            public string? name { get; set; }
+            public List<HPOSVersionItem>? osVersionList { get; set; }
+        }
+
+        public class HPOSVersionItem
+        {
+            public string? id { get; set; }
+            public string? name { get; set; }
+        }
+
+        public class HPDriverDetailsResponse
+        {
+            public HPDriverDetailsData? data { get; set; }
+        }
+
+        public class HPDriverDetailsData
+        {
+            public List<HPSoftwareType>? softwareTypes { get; set; }
+        }
+
+        public class HPSoftwareType
+        {
+            public string? accordionNameEn { get; set; }
+            public List<HPSoftwareDriver>? softwareDriversList { get; set; }
+        }
+
+        public class HPSoftwareDriver
+        {
+            public HPLatestVersionDriver? latestVersionDriver { get; set; }
+        }
+
+        public class HPLatestVersionDriver
+        {
+            public string? title { get; set; }
+            public string? version { get; set; }
+            public string? fileUrl { get; set; }
+            public string? releaseDateString { get; set; }
+            public string? fileSize { get; set; }
+        }
+
+        private static string GetSKUNumber()
+        {
+            try
+            {
+                using var searcher = new ManagementObjectSearcher("SELECT SystemSKUNumber FROM Win32_ComputerSystem");
+                using var collection = searcher.Get();
+                foreach (ManagementObject obj in collection)
+                {
+                    using (obj)
+                    {
+                        string? sku = obj["SystemSKUNumber"]?.ToString();
+                        if (!string.IsNullOrEmpty(sku))
+                        {
+                            int hashIndex = sku.IndexOf('#');
+                            if (hashIndex != -1)
+                            {
+                                sku = sku.Substring(0, hashIndex);
+                            }
+                            return sku.Trim();
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLine(ex.ToString());
+            }
+            return string.Empty;
+        }
+
+        private Dictionary<string, string> GetDeviceNamesAndVersions()
+        {
+            using (ManagementObjectSearcher objSearcher = new ManagementObjectSearcher("Select DeviceName, DriverVersion from Win32_PnPSignedDriver"))
+            {
+                using (ManagementObjectCollection objCollection = objSearcher.Get())
+                {
+                    Dictionary<string, string> list = new(StringComparer.OrdinalIgnoreCase);
+                    foreach (ManagementObject obj in objCollection) using (obj)
+                    {
+                        if (obj["DeviceName"] is not null && obj["DriverVersion"] is not null)
+                        {
+                            list[obj["DeviceName"].ToString()] = obj["DriverVersion"].ToString();
+                        }
+                    }
+                    return list;
+                }
+            }
+        }
+
+        private static string CleanVersion(string version)
+        {
+            if (string.IsNullOrEmpty(version)) return "0.0";
+
+            int revIndex = version.IndexOf("Rev", StringComparison.OrdinalIgnoreCase);
+            if (revIndex != -1)
+            {
+                version = version.Substring(0, revIndex).Trim();
+            }
+
+            var biosMatch = System.Text.RegularExpressions.Regex.Match(version, @"^[A-Za-z]+\.(\d+)$");
+            if (biosMatch.Success)
+            {
+                return biosMatch.Groups[1].Value + ".0";
+            }
+
+            var cleanMatch = System.Text.RegularExpressions.Regex.Match(version, @"^\d+(\.\d+)*");
+            if (cleanMatch.Success)
+            {
+                string val = cleanMatch.Value;
+                if (!val.Contains('.'))
+                {
+                    val += ".0";
+                }
+                return val;
+            }
+
+            return "0.0";
+        }
+
+        private static string? FindLocalVersion(string title, Dictionary<string, string> localDevices)
+        {
+            string t = title.ToLowerInvariant();
+            foreach (var pair in localDevices)
+            {
+                string deviceName = pair.Key.ToLowerInvariant();
+                string version = pair.Value;
+
+                if (t.Contains("nvidia") && t.Contains("graphics") && deviceName.Contains("nvidia") && (deviceName.Contains("geforce") || deviceName.Contains("quadro") || deviceName.Contains("rtx") || deviceName.Contains("gtx")))
+                {
+                    return version;
+                }
+                if (t.Contains("intel") && t.Contains("graphics") && deviceName.Contains("intel") && (deviceName.Contains("arc") || deviceName.Contains("iris") || deviceName.Contains("hd graphics") || deviceName.Contains("uhd")))
+                {
+                    return version;
+                }
+                if (t.Contains("realtek") && t.Contains("audio") && deviceName.Contains("realtek") && deviceName.Contains("audio") && !deviceName.Contains("effects") && !deviceName.Contains("universal"))
+                {
+                    return version;
+                }
+                if (t.Contains("intel") && t.Contains("bluetooth") && deviceName.Contains("intel") && deviceName.Contains("bluetooth"))
+                {
+                    return version;
+                }
+                if (t.Contains("intel") && (t.Contains("wireless lan") || t.Contains("wi-fi") || t.Contains("wifi")) && deviceName.Contains("intel") && (deviceName.Contains("wi-fi") || deviceName.Contains("wireless") || deviceName.Contains("dual band")))
+                {
+                    return version;
+                }
+                if (t.Contains("realtek") && (t.Contains("local area network") || t.Contains("lan")) && deviceName.Contains("realtek") && (deviceName.Contains("gbe") || deviceName.Contains("pcie") || deviceName.Contains("ethernet")))
+                {
+                    return version;
+                }
+                if (t.Contains("intel") && (t.Contains("gna") || t.Contains("gaussian")) && deviceName.Contains("intel") && (deviceName.Contains("gna") || deviceName.Contains("gaussian")))
+                {
+                    return version;
+                }
+                if (t.Contains("synaptics") && t.Contains("touchpad") && deviceName.Contains("synaptics") && deviceName.Contains("touchpad"))
+                {
+                    return version;
+                }
+                if (t.Contains("elan") && t.Contains("touchpad") && deviceName.Contains("elan") && deviceName.Contains("touchpad"))
+                {
+                    return version;
+                }
+                if (t.Contains("intel") && t.Contains("serial io") && deviceName.Contains("intel") && deviceName.Contains("serial io"))
+                {
+                    return version;
+                }
+
+                if (t.Contains("intel") && deviceName.Contains("intel"))
+                {
+                    string key = t.Replace("intel", "").Trim();
+                    if (!string.IsNullOrEmpty(key) && deviceName.Contains(key))
+                    {
+                        return version;
+                    }
+                }
+            }
+            return null;
+        }
+
+        public async Task HPDriversAsync(TableLayoutPanel tableBios, TableLayoutPanel tableDrivers, CancellationToken token = default)
+        {
+            try
+            {
+                string sku = GetSKUNumber();
+                if (string.IsNullOrEmpty(sku))
+                {
+                    Logger.WriteLine("HP Update: SKU number not found in WMI.");
+                    return;
+                }
+                Logger.WriteLine($"HP Update SKU: {sku}");
+
+                string typeaheadUrl = $"https://support.hp.com/typeahead?q={sku}&cc=us&lc=en";
+                var typeaheadJson = await _httpClient.GetStringAsync(typeaheadUrl, token);
+                var typeaheadData = JsonSerializer.Deserialize<HPTypeaheadResponse>(typeaheadJson);
+                if (typeaheadData?.matches == null || typeaheadData.matches.Count == 0)
+                {
+                    Logger.WriteLine("HP Update: No product matches found in typeahead API.");
+                    return;
+                }
+                long productOid = typeaheadData.matches[0].productId;
+                Logger.WriteLine($"HP Update productOid: {productOid}");
+
+                string osUrl = $"https://support.hp.com/wcc-services/swd-v2/osVersionData?cc=us&lc=en&productOid={productOid}";
+                var osJson = await _httpClient.GetStringAsync(osUrl, token);
+                var osData = JsonSerializer.Deserialize<HPOSVersionResponse>(osJson);
+                if (osData?.data?.osversions == null)
+                {
+                    Logger.WriteLine("HP Update: Failed to retrieve OS list.");
+                    return;
+                }
+
+                string targetOsName = "Windows 11";
+                if (System.Environment.OSVersion.Version.Major == 10 && System.Environment.OSVersion.Version.Build < 22000)
+                {
+                    targetOsName = "Windows 10";
+                }
+
+                string? osTmsId = null;
+                string? osNameSelected = null;
+
+                foreach (var group in osData.data.osversions)
+                {
+                    if (group.name != null && group.name.Contains(targetOsName, StringComparison.OrdinalIgnoreCase))
+                    {
+                        if (group.osVersionList != null && group.osVersionList.Count > 0)
+                        {
+                            var firstVer = group.osVersionList[0];
+                            osTmsId = firstVer.id;
+                            osNameSelected = firstVer.name;
+                            break;
+                        }
+                    }
+                }
+
+                if (string.IsNullOrEmpty(osTmsId))
+                {
+                    Logger.WriteLine($"HP Update: Target OS {targetOsName} not found in OS list.");
+                    return;
+                }
+                Logger.WriteLine($"HP Update OS Selected: {osNameSelected} (ID: {osTmsId})");
+
+                var request = new HttpRequestMessage(HttpMethod.Post, "https://support.hp.com/wcc-services/swd-v2/driverDetails");
+                request.Headers.Add("User-Agent", "Mozilla/5.0");
+                request.Headers.Referrer = new Uri("https://support.hp.com/");
+
+                var payload = new
+                {
+                    lc = "en",
+                    cc = "us",
+                    osTMSId = osTmsId,
+                    osName = targetOsName,
+                    productSeriesOid = productOid
+                };
+                string jsonPayload = JsonSerializer.Serialize(payload);
+                request.Content = new StringContent(jsonPayload, System.Text.Encoding.UTF8, "application/json");
+
+                var response = await _httpClient.SendAsync(request, token);
+                var jsonResponse = await response.Content.ReadAsStringAsync(token);
+
+                var driverDetails = JsonSerializer.Deserialize<HPDriverDetailsResponse>(jsonResponse);
+                if (driverDetails?.data?.softwareTypes == null)
+                {
+                    Logger.WriteLine("HP Update: Failed to deserialize driver details or no types returned.");
+                    return;
+                }
+
+                var localDevices = GetDeviceNamesAndVersions();
+
+                List<DriverDownload> biosList = new();
+                List<DriverDownload> driverList = new();
+
+                foreach (var type in driverDetails.data.softwareTypes)
+                {
+                    if (type.softwareDriversList == null) continue;
+                    
+                    bool isBiosType = type.accordionNameEn != null && type.accordionNameEn.Equals("BIOS", StringComparison.OrdinalIgnoreCase);
+
+                    foreach (var entry in type.softwareDriversList)
+                    {
+                        if (entry.latestVersionDriver == null) continue;
+                        
+                        var item = entry.latestVersionDriver;
+                        if (string.IsNullOrEmpty(item.title) || string.IsNullOrEmpty(item.version)) continue;
+
+                        var driver = new DriverDownload
+                        {
+                            categoryName = type.accordionNameEn ?? "Software",
+                            title = item.title,
+                            version = item.version,
+                            downloadUrl = item.fileUrl ?? "https://support.hp.com/us-en/drivers/laptops",
+                            date = item.releaseDateString ?? "Check Website"
+                        };
+
+                        if (isBiosType)
+                        {
+                            biosList.Add(driver);
+                            VisualiseDriver(driver, tableBios);
+                        }
+                        else
+                        {
+                            driverList.Add(driver);
+                            VisualiseDriver(driver, tableDrivers);
+                        }
+                    }
+                }
+
+                ShowTable(tableBios);
+                ShowTable(tableDrivers);
+
+                int updatesCountLocal = 0;
+
+                int biosCount = 0;
+                foreach (var driver in biosList)
+                {
+                    token.ThrowIfCancellationRequested();
+                    int newer = DRIVER_NOT_FOUND;
+                    string tip = driver.version;
+
+                    if (!string.IsNullOrEmpty(bios))
+                    {
+                        try
+                        {
+                            string localClean = CleanVersion(bios);
+                            string remoteClean = CleanVersion(driver.version);
+                            int compare = new Version(remoteClean).CompareTo(new Version(localClean));
+                            newer = compare > 0 ? DRIVER_NEWER : -1;
+                            tip = $"Download: {driver.version}\nInstalled: {bios}";
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.WriteLine($"HP BIOS version comparison error: {ex.Message}");
+                        }
+                    }
+
+                    VisualiseNewDriver(biosCount, newer, tip, tableBios);
+                    if (newer == DRIVER_NEWER)
+                    {
+                        updatesCountLocal++;
+                        VisualiseNewCount(updatesCountLocal, tableBios);
+                    }
+                    biosCount++;
+                }
+
+                int driverCount = 0;
+                foreach (var driver in driverList)
+                {
+                    token.ThrowIfCancellationRequested();
+                    int newer = DRIVER_NOT_FOUND;
+                    string tip = driver.version;
+
+                    string? localVer = FindLocalVersion(driver.title, localDevices);
+                    if (!string.IsNullOrEmpty(localVer))
+                    {
+                        try
+                        {
+                            string localClean = CleanVersion(localVer);
+                            string remoteClean = CleanVersion(driver.version);
+                            int compare = new Version(remoteClean).CompareTo(new Version(localClean));
+                            newer = compare > 0 ? DRIVER_NEWER : -1;
+                            tip = $"Download: {driver.version}\nInstalled: {localVer}";
+                        }
+                        catch (Exception ex)
+                        {
+                            Logger.WriteLine($"HP Driver version comparison error: {ex.Message}");
+                        }
+                    }
+
+                    VisualiseNewDriver(driverCount, newer, tip, tableDrivers);
+                    if (newer == DRIVER_NEWER)
+                    {
+                        updatesCountLocal++;
+                        VisualiseNewCount(updatesCountLocal, tableDrivers);
+                    }
+                    driverCount++;
+                }
+
+                updatesCount = updatesCountLocal;
+            }
+            catch (OperationCanceledException)
+            {
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLine($"HP Update query failed: {ex.ToString()}");
+            }
+        }
+
+        #endregion
     }
 }

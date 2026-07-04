@@ -1,4 +1,6 @@
-﻿using Microsoft.Win32;
+using Microsoft.Win32;
+using OmenCore.Hardware;
+using PawnIO;
 using System.Runtime.InteropServices;
 
 namespace GHelper.Mode
@@ -57,6 +59,13 @@ namespace GHelper.Mode
 
         static readonly Guid GUID_CPU = new Guid("54533251-82be-4824-96c1-47b60b740d00");
         static readonly Guid GUID_BOOST = new Guid("be337238-0d82-4146-a960-4f3749d470c7");
+        static readonly Guid GUID_PROCTHROTTLEMAX = new Guid("bc5038f7-23e0-4960-96da-33abaf5935ec");
+        static readonly Guid GUID_SYSCOOLPOL = new Guid("94d3a615-a899-4ac5-ae2b-e4d8f634367f");
+
+        // Windows PERFEPP: 0 = max performance, 100 = max power saving.
+        // Intel HWP EPP MSR: 0 = max performance, 255 = max power saving.
+        static readonly Guid GUID_EPP_AC = new Guid("36687f9e-e3a5-4dbf-b1dc-15eb381c6863");
+        static readonly Guid GUID_EPP_DC = new Guid("36687f9e-e3a5-4dbf-b1dc-15eb381c6863");
 
         private static Guid GUID_SLEEP_SUBGROUP = new Guid("238c9fa8-0aad-41ed-83f4-97be242c8f20");
         private static Guid GUID_HIBERNATEIDLE = new Guid("9d7815a6-7ee4-497e-8888-515a05f02364");
@@ -66,6 +75,16 @@ namespace GHelper.Mode
 
         private static Guid GUID_SUB_PCIEXPRESS = new Guid("501a4d13-42af-4429-9fd1-a8218c268e20");
         private static Guid GUID_PCI_EXPRESS_ASPM = new Guid("ee12f906-d277-404b-b6da-e5fa1a576df5");
+
+        private static Guid GUID_SUB_DISK = new Guid("0012ee47-9041-4b5d-9b77-535fba8b1442");
+        private static Guid GUID_DISKNVMENOPPME = new Guid("fc7372b6-ab2d-43ee-8797-15e9841f2cca");
+
+        private static Guid GUID_SUB_NONE = new Guid("fea3413e-7e05-4911-9a71-700331f1c294");
+        private static Guid GUID_CONNECTIVITYINSTANDBY = new Guid("f15576e8-98b7-4186-b944-eafa664402d9");
+
+        private static Guid GUID_SCHEDPOLICY = new Guid("93b8b6dc-0698-4d1c-9ee4-0644e900c85d");
+        private static Guid GUID_SHORTSCHEDPOLICY = new Guid("bae08b81-2d5e-4688-ad6a-13243356654b");
+        private static Guid GUID_CPMAXCORES = new Guid("ea062031-0e34-4ff1-9b6d-eb1059334028"); // Class 0 (P-cores)
 
         [DllImportAttribute("powrprof.dll", EntryPoint = "PowerGetActualOverlayScheme")]
         public static extern uint PowerGetActualOverlayScheme(out Guid ActualOverlayGuid);
@@ -96,6 +115,47 @@ namespace GHelper.Mode
                 { POWER_TURBO, "Best Performance" },
                 { PLAN_HIGH_PERFORMANCE, "High Performance Plan"},
             };
+
+        private static IMsrAccess? _msrAccess;
+        private static bool _msrAccessAttempted;
+
+        // EPP presets: ThrottleStop-style raw HWP EPP values (0-255).
+        public static Dictionary<int, string> eppPresets = new Dictionary<int, string>
+            {
+                { 0,   "Performance" },
+                { 32,  "High Performance" },
+                { 64,  "Balanced Performance" },
+                { 128, "Balanced" },
+                { 192, "Balanced Power Saving" },
+                { 255, "Power Saving" },
+            };
+
+        private static int ClampRawEpp(int epp)
+        {
+            return Math.Clamp(epp, 0, 255);
+        }
+
+        private static int RawEppToWindowsPercent(int epp)
+        {
+            return Math.Clamp((int)Math.Round(ClampRawEpp(epp) * 100.0 / 255.0), 0, 100);
+        }
+
+        private static int WindowsPercentToRawEpp(int epp)
+        {
+            return Math.Clamp((int)Math.Round(Math.Clamp(epp, 0, 100) * 255.0 / 100.0), 0, 255);
+        }
+
+        private static IMsrAccess? GetMsrAccess()
+        {
+            if (CpuInfo.IsAMD) return null;
+            if (_msrAccess?.IsAvailable == true) return _msrAccess;
+            if (_msrAccessAttempted) return null;
+
+            _msrAccessAttempted = true;
+            _msrAccess = MsrAccessFactory.Create();
+            return _msrAccess?.IsAvailable == true ? _msrAccess : null;
+        }
+
         static Guid GetActiveScheme()
         {
             IntPtr pActiveSchemeGuid;
@@ -116,6 +176,82 @@ namespace GHelper.Mode
 
             return AcValueIndex.ToInt32();
 
+        }
+
+        public static int GetEPP()
+        {
+            var msr = GetMsrAccess();
+            if (msr != null)
+            {
+                try
+                {
+                    int epp = msr.ReadHwpEpp();
+                    if (epp >= 0 && epp <= 255)
+                        return epp;
+                }
+                catch (Exception ex)
+                {
+                    Logger.WriteLine($"EPP MSR read error: {ex.Message}");
+                }
+            }
+
+            try
+            {
+                Guid activeSchemeGuid = GetActiveScheme();
+                uint status = PowerReadACValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_CPU, GUID_EPP_AC, out IntPtr val);
+                if (status != 0)
+                {
+                    Logger.WriteLine($"EPP read failed: {status}");
+                    return 128;
+                }
+
+                int result = val.ToInt32();
+                if (result < 0 || result > 100) return 128;
+                return WindowsPercentToRawEpp(result);
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLine($"EPP read error: {ex.Message}");
+                return 128;
+            }
+        }
+
+        public static bool SetEPP(int epp)
+        {
+            epp = ClampRawEpp(epp);
+
+            bool msrOk = false;
+            var msr = GetMsrAccess();
+            if (msr != null)
+            {
+                try
+                {
+                    msrOk = msr.SetHwpEpp(epp);
+                    Logger.WriteLine($"EPP MSR set to {epp}: {(msrOk ? "OK" : "FAIL")}");
+                }
+                catch (Exception ex)
+                {
+                    Logger.WriteLine($"EPP MSR set error: {ex.Message}");
+                }
+            }
+
+            int windowsEpp = RawEppToWindowsPercent(epp);
+
+            Guid activeSchemeGuid = GetActiveScheme();
+
+            uint hrAC = PowerWriteACValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_CPU, GUID_EPP_AC, windowsEpp);
+            uint hrDC = PowerWriteDCValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_CPU, GUID_EPP_DC, windowsEpp);
+            uint hrActive = PowerSetActiveScheme(IntPtr.Zero, activeSchemeGuid);
+
+            PowerReadACValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_CPU, GUID_EPP_AC, out IntPtr readAc);
+            PowerReadDCValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_CPU, GUID_EPP_DC, out IntPtr readDc);
+
+            int ac = readAc.ToInt32();
+            int dc = readDc.ToInt32();
+            bool windowsOk = hrAC == 0 && hrDC == 0 && hrActive == 0 && ac == windowsEpp && dc == windowsEpp;
+
+            Logger.WriteLine($"EPP Windows PERFEPP set to {windowsEpp}% ({epp}/255): {(windowsOk ? "OK" : $"AC={hrAC}/{ac}, DC={hrDC}/{dc}, Active={hrActive}")}");
+            return msrOk || windowsOk;
         }
 
         public static void SetCPUBoost(int boost = 0)
@@ -143,6 +279,37 @@ namespace GHelper.Mode
             PowerSetActiveScheme(IntPtr.Zero, activeSchemeGuid);
 
             Logger.WriteLine("Boost " + boost);
+        }
+
+        public static int GetCPUMaxState()
+        {
+            IntPtr AcValueIndex;
+            Guid activeSchemeGuid = GetActiveScheme();
+
+            UInt32 value = PowerReadACValueIndex(IntPtr.Zero,
+                 activeSchemeGuid,
+                 GUID_CPU,
+                 GUID_PROCTHROTTLEMAX, out AcValueIndex);
+
+            int result = AcValueIndex.ToInt32();
+            if (result < 5 || result > 100) return 100;
+            return result;
+        }
+
+        public static void SetCPUMaxState(int percent)
+        {
+            if (percent < 5) percent = 5;
+            if (percent > 100) percent = 100;
+
+            Guid activeSchemeGuid = GetActiveScheme();
+
+            if (percent == GetCPUMaxState()) return;
+
+            PowerWriteACValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_CPU, GUID_PROCTHROTTLEMAX, percent);
+            PowerWriteDCValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_CPU, GUID_PROCTHROTTLEMAX, percent);
+            PowerSetActiveScheme(IntPtr.Zero, activeSchemeGuid);
+
+            Logger.WriteLine("CPU Max State %: " + percent);
         }
 
         public static string GetPowerMode()
@@ -339,6 +506,53 @@ namespace GHelper.Mode
             PowerSetActiveScheme(IntPtr.Zero, activeSchemeGuid);
 
             Logger.WriteLine("Setting Hibernate after " + seconds + ": " + (hrAC == 0 ? "OK" : hrAC));
+        }
+
+        public static void SetCoolingPolicy(int policy)
+        {
+            Guid activeSchemeGuid = GetActiveScheme();
+            PowerWriteACValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_CPU, GUID_SYSCOOLPOL, policy);
+            PowerWriteDCValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_CPU, GUID_SYSCOOLPOL, policy);
+            PowerSetActiveScheme(IntPtr.Zero, activeSchemeGuid);
+            Logger.WriteLine("System Cooling Policy: " + (policy == 0 ? "Passive" : "Active"));
+        }
+
+        public static void SetNvmePower(int on)
+        {
+            Guid activeSchemeGuid = GetActiveScheme();
+            PowerWriteACValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_SUB_DISK, GUID_DISKNVMENOPPME, on);
+            PowerWriteDCValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_SUB_DISK, GUID_DISKNVMENOPPME, on);
+            PowerSetActiveScheme(IntPtr.Zero, activeSchemeGuid);
+            Logger.WriteLine("NVMe NOPPME: " + (on == 1 ? "On" : "Off"));
+        }
+
+        public static void SetConnectivityInStandby(int disable)
+        {
+            Guid activeSchemeGuid = GetActiveScheme();
+            PowerWriteACValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_SUB_NONE, GUID_CONNECTIVITYINSTANDBY, disable);
+            PowerWriteDCValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_SUB_NONE, GUID_CONNECTIVITYINSTANDBY, disable);
+            PowerSetActiveScheme(IntPtr.Zero, activeSchemeGuid);
+            Logger.WriteLine("Connectivity in Standby: " + (disable == 0 ? "Disabled" : "Enabled"));
+        }
+
+        public static void SetSchedPolicy(int policy)
+        {
+            Guid activeSchemeGuid = GetActiveScheme();
+            PowerWriteACValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_CPU, GUID_SCHEDPOLICY, policy);
+            PowerWriteDCValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_CPU, GUID_SCHEDPOLICY, policy);
+            PowerWriteACValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_CPU, GUID_SHORTSCHEDPOLICY, policy);
+            PowerWriteDCValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_CPU, GUID_SHORTSCHEDPOLICY, policy);
+            PowerSetActiveScheme(IntPtr.Zero, activeSchemeGuid);
+            Logger.WriteLine("Sched Policy: " + policy);
+        }
+
+        public static void SetPcoreParking(int maxCoresPercent)
+        {
+            Guid activeSchemeGuid = GetActiveScheme();
+            PowerWriteACValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_CPU, GUID_CPMAXCORES, maxCoresPercent);
+            PowerWriteDCValueIndex(IntPtr.Zero, activeSchemeGuid, GUID_CPU, GUID_CPMAXCORES, maxCoresPercent);
+            PowerSetActiveScheme(IntPtr.Zero, activeSchemeGuid);
+            Logger.WriteLine("P-Core Max Active %: " + maxCoresPercent);
         }
 
         [DllImport("Kernel32")]

@@ -1,4 +1,4 @@
-﻿using GHelper.Mode;
+using GHelper.Mode;
 
 namespace GHelper.Fan
 {
@@ -23,7 +23,7 @@ namespace GHelper.Fan
 
         static int[] _fanMax = InitFanMax();
         static int[] _fanMin = GetDefaultMin();
-        static bool _fanRpm = AppConfig.IsNotFalse("fan_rpm");
+        static bool _fanRpm = AppConfig.Is("fan_rpm");
 
         public FanSensorControl(Fans fansForm)
         {

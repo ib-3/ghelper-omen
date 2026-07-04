@@ -122,7 +122,7 @@ namespace GHelper
 
             Application.EnableVisualStyles();
 
-            HardwareControl.RecreateGpuControl();
+            if (!HardwareControl.IsEcoMode()) HardwareControl.RecreateGpuControl();
 
             trayIcon = new NotifyIcon
             {
@@ -183,10 +183,13 @@ namespace GHelper
                 case "cpu":
                     Startup.ReScheduleAdmin();
                     settingsForm.FansToggle();
+                    modeControl.SetPower();
                     break;
                 case "gpu":
                     Startup.ReScheduleAdmin();
                     settingsForm.FansToggle(1);
+                    modeControl.SetGPUClocks(false);
+                    modeControl.SetGPUPower();
                     break;
                 case "services":
                     settingsForm.extraForm = new Extra();

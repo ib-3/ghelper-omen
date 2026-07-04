@@ -3,11 +3,80 @@ using System.Diagnostics;
 
 namespace GHelper.Helpers
 {
+    public class DonateForm : RForm
+    {
+        public DonateForm()
+        {
+            Text = "Support & Credits";
+            StartPosition = FormStartPosition.CenterParent;
+            MaximizeBox = false;
+            MinimizeBox = false;
+            FormBorderStyle = FormBorderStyle.FixedDialog;
+            ShowIcon = false;
+            AutoSize = true;
+            AutoSizeMode = AutoSizeMode.GrowAndShrink;
+
+            InitTheme(true);
+
+            var layout = new FlowLayoutPanel
+            {
+                AutoSize = true,
+                AutoSizeMode = AutoSizeMode.GrowAndShrink,
+                FlowDirection = FlowDirection.TopDown,
+                WrapContents = false,
+                Padding = new Padding(25)
+            };
+
+            var lblSupport = new Label { Text = "Support me by donating:", AutoSize = true, Font = new Font(Font, FontStyle.Bold), Margin = new Padding(0, 0, 0, 5) };
+            var linkPaypal = new LinkLabel { Text = "Donate via PayPal", AutoSize = true, Font = new Font(Font, FontStyle.Regular), Margin = new Padding(5, 0, 0, 25), LinkColor = darkTheme ? Color.LightSkyBlue : Color.Blue };
+            linkPaypal.LinkClicked += (s, e) => Process.Start(new ProcessStartInfo("https://paypal.me/iborbas") { UseShellExecute = true });
+
+            layout.Controls.Add(lblSupport);
+            layout.Controls.Add(linkPaypal);
+
+            var lblThanks = new Label { Text = "Special thanks to the following open-source projects:", AutoSize = true, Font = new Font(Font, FontStyle.Bold), Margin = new Padding(0, 0, 0, 15) };
+            layout.Controls.Add(lblThanks);
+
+            void AddCredit(string name, string url, string description)
+            {
+                var link = new LinkLabel
+                {
+                    Text = name,
+                    AutoSize = true,
+                    Font = new Font(Font, FontStyle.Bold),
+                    LinkBehavior = LinkBehavior.HoverUnderline,
+                    LinkColor = darkTheme ? Color.LightSkyBlue : Color.Blue,
+                    Margin = new Padding(0, 0, 0, 2)
+                };
+                link.LinkClicked += (s, e) => Process.Start(new ProcessStartInfo(url) { UseShellExecute = true });
+
+                var desc = new Label
+                {
+                    Text = description,
+                    AutoSize = true,
+                    ForeColor = darkTheme ? Color.LightGray : Color.DimGray,
+                    Margin = new Padding(10, 0, 0, 12)
+                };
+
+                layout.Controls.Add(link);
+                layout.Controls.Add(desc);
+            }
+
+            AddCredit("G-Helper", "https://github.com/seerge/g-helper", "Foundational project — UI, layout, and core logic.");
+            AddCredit("PawnIO", "https://github.com/namazso/PawnIO", "Signed kernel driver for safe MSR/MMIO/SMU access.");
+            AddCredit("Libre Hardware Monitor", "https://github.com/LibreHardwareMonitor/LibreHardwareMonitor", "Robust hardware sensor and power telemetry reading.");
+            AddCredit("Universal x86 Tuning Utility (UXTU)", "https://github.com/JamesCJ60/Universal-x86-Tuning-Utility", "Ryzen SMU undervolting and power limit endpoints.");
+            AddCredit("OmenCore", "https://github.com/OmenHub/OmenCore", "Original HP OMEN WMI reverse engineering.");
+            AddCredit("NvAPIWrapper", "https://github.com/falahati/NvAPIWrapper", "NVIDIA GPU API access.");
+
+            Controls.Add(layout);
+        }
+    }
+
     public class DonateControl
     {
         private readonly SettingsForm _settings;
         private readonly RBadgeButton _button;
-        private CustomContextMenu? _contextMenu;
 
         public DonateControl(SettingsForm settings, RBadgeButton button)
         {
@@ -17,78 +86,35 @@ namespace GHelper.Helpers
 
         public void Init()
         {
-            _button.Click += Button_Click;
-            _button.MouseUp += Button_MouseUp;
-
-            if (!AppConfig.Is("donate_dismissed"))
+            if (AppConfig.Is("hide_donate_button"))
             {
-                int click = AppConfig.Get("donate_click");
-                int startCount = AppConfig.Get("start_count");
-                if (startCount >= ((click < 20) ? 20 : click + 50))
-                {
-                    _button.BorderColor = RForm.colorTurbo;
-                    _button.Badge = Math.Clamp((startCount - click) / 50, 1, 5);
-                }
+                _button.Visible = false;
+                return;
             }
+
+            _button.Click += Button_Click;
+            
+            // Automatically say Thank You!
+            SetThankYou();
         }
 
         public void ApplyTheme()
         {
-            if (_contextMenu is not null)
-            {
-                _contextMenu.BackColor = _settings.BackColor;
-                _contextMenu.ForeColor = _settings.ForeColor;
-            }
-        }
-
-        private void Button_MouseUp(object? sender, MouseEventArgs e)
-        {
-            if (e.Button != MouseButtons.Right) return;
-
-            if (_contextMenu is null)
-            {
-                var padding = new Padding(5, 5, 5, 5);
-
-                var menuAlreadyDonated = new ToolStripMenuItem("❤ Already donated") { Margin = padding };
-                menuAlreadyDonated.Click += (s, ev) =>
-                {
-                    AppConfig.Set("donate_dismissed", 1);
-                    SetThankYou();
-                };
-
-                var menuNotInterested = new ToolStripMenuItem("Not interested") { Margin = padding };
-                menuNotInterested.Click += (s, ev) =>
-                {
-                    AppConfig.Set("donate_dismissed", 1);
-                    _button.Badge = 0;
-                };
-
-                var menuCancel = new ToolStripMenuItem("Cancel") { Margin = padding };
-
-                _contextMenu = new CustomContextMenu();
-                _contextMenu.ShowImageMargin = false;
-                _contextMenu.Items.Add(menuAlreadyDonated);
-                _contextMenu.Items.Add(menuNotInterested);
-                _contextMenu.Items.Add(new ToolStripSeparator());
-                _contextMenu.Items.Add(menuCancel);
-                _contextMenu.Renderer = new CustomMenuRenderer();
-            }
-
-            ApplyTheme();
-            _contextMenu.Show(_button, new Point(e.X, e.Y));
+            // Now handled dynamically when the form is created
         }
 
         private void Button_Click(object? sender, EventArgs e)
         {
-            AppConfig.Set("donate_click", AppConfig.Get("start_count"));
-            SetThankYou();
-            Process.Start(new ProcessStartInfo("https://g-helper.com/support") { UseShellExecute = true });
+            using var form = new DonateForm();
+            form.BackColor = _settings.BackColor;
+            form.ForeColor = _settings.ForeColor;
+            form.ShowDialog(_settings);
         }
 
         private void SetThankYou()
         {
             _button.Badge = 0;
-            _button.Text = Properties.Strings.ThankYou;
+            _button.Text = "Thank You!"; // Set manually as requested
         }
     }
 }

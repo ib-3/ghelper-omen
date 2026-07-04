@@ -22,7 +22,7 @@ namespace GHelper
         Series seriesXGM;
 
         static bool gpuVisible = true;
-        static bool fanRpm = true;
+        static bool fanRpm = false;
 
         static readonly Font _axisFont = new Font("Arial", 7F);
 
@@ -53,7 +53,7 @@ namespace GHelper
 
             Text = Properties.Strings.FansAndPower;
             labelPowerLimits.Text = Properties.Strings.PowerLimits;
-            checkApplyPower.Text = Properties.Strings.ApplyPowerLimits;
+            // rucna primjena
 
             labelFans.Text = "BIOS " + Properties.Strings.FanCurves;
             labelBoost.Text = Properties.Strings.CPUBoost;
@@ -73,7 +73,7 @@ namespace GHelper
             buttonReadLimits.Text = "Read Limits";
             checkApplyUV.Text = Properties.Strings.AutoApply;
 
-            buttonCalibrate.Text = Properties.Strings.Calibrate;
+
 
             InitTheme(true);
 
@@ -113,22 +113,22 @@ namespace GHelper
 
             buttonReset.Click += ButtonReset_Click;
 
-            trackTotal.Maximum = AsusACPI.MaxTotal;
-            trackTotal.Minimum = AsusACPI.MinTotal;
+            trackTotal.Max = AsusACPI.MaxTotal;
+            trackTotal.Min = AsusACPI.MinTotal;
 
-            trackSlow.Maximum = AsusACPI.MaxTotal;
-            trackSlow.Minimum = AsusACPI.MinTotal;
+            trackSlow.Max = AsusACPI.MaxTotal;
+            trackSlow.Min = AsusACPI.MinTotal;
 
-            trackCPU.Maximum = AsusACPI.MaxCPU;
-            trackCPU.Minimum = AsusACPI.MinCPU;
+            trackCPU.Max = AsusACPI.MaxCPU;
+            trackCPU.Min = AsusACPI.MinCPU;
 
-            trackFast.Maximum = AsusACPI.MaxTotal;
-            trackFast.Minimum = AsusACPI.MinTotal;
+            trackFast.Max = AsusACPI.MaxTotal;
+            trackFast.Min = AsusACPI.MinTotal;
 
-            trackTotal.Scroll += TrackTotal_Scroll;
-            trackSlow.Scroll += TrackSlow_Scroll;
-            trackFast.Scroll += TrackFast_Scroll;
-            trackCPU.Scroll += TrackCPU_Scroll;
+            trackTotal.ValueChanged += TrackTotal_Scroll;
+            trackSlow.ValueChanged += TrackSlow_Scroll;
+            trackFast.ValueChanged += TrackFast_Scroll;
+            trackCPU.ValueChanged += TrackCPU_Scroll;
 
             trackFast.MouseUp += TrackPower_MouseUp;
             trackCPU.MouseUp += TrackPower_MouseUp;
@@ -141,7 +141,7 @@ namespace GHelper
             trackSlow.KeyUp += TrackPower_KeyUp;
 
             checkApplyFans.Click += CheckApplyFans_Click;
-            checkApplyPower.Click += CheckApplyPower_Click;
+            buttonApplyPower.Click += ButtonApplyPower_Click;
 
             trackGPUClockLimit.Minimum = NvidiaGpuControl.MinClockLimit;
             trackGPUClockLimit.Maximum = NvidiaGpuControl.MaxClockLimit;
@@ -208,6 +208,8 @@ namespace GHelper
 
             comboBoost.SelectedValueChanged += ComboBoost_Changed;
             comboPowerMode.SelectedValueChanged += ComboPowerMode_Changed;
+            textEPP.KeyPress += TextEPP_KeyPress;
+            textEPP.Leave += TextEPP_Leave;
 
 
             comboModes.SelectionChangeCommitted += ComboModes_SelectedValueChanged;
@@ -238,7 +240,7 @@ namespace GHelper
 
             checkApplyUV.Click += CheckApplyUV_Click;
 
-            buttonCalibrate.Click += ButtonCalibrate_Click;
+
 
             buttonDownload.Click += ButtonDownload_Click;
 
@@ -247,7 +249,7 @@ namespace GHelper
 
             ToggleNavigation(0);
 
-            if (!Program.acpi.IsSupported(AsusACPI.DevsCPUFanCurve)) buttonCalibrate.Visible = false;
+
 
             FormClosed += Fans_FormClosed;
             Activated  += (_, _) => VisualiseAdvanced();
@@ -263,12 +265,6 @@ namespace GHelper
         private void ButtonDownload_Click(object? sender, EventArgs e)
         {
             Process.Start(new ProcessStartInfo("https://pawnio.eu/") { UseShellExecute = true });
-        }
-
-        private void ButtonCalibrate_Click(object? sender, EventArgs e)
-        {
-            buttonCalibrate.Enabled = false;
-            fanSensorControl.StartCalibration();
         }
 
         private void ChartCPU_MouseClick(object? sender, MouseEventArgs e)
@@ -785,7 +781,8 @@ namespace GHelper
         {
 
             string title = "";
-            string scale = TempHelper.IsFahrenheit ? ", RPM/°F" : ", RPM/°C";
+            string rpmLabel = fanRpm ? "RPM" : "%";
+            string scale = TempHelper.IsFahrenheit ? $", {rpmLabel}/°F" : $", {rpmLabel}/°C";
 
             switch (device)
             {
@@ -853,19 +850,15 @@ namespace GHelper
 
         private void TrackPower_MouseUp(object? sender, MouseEventArgs e)
         {
-            Task.Run(() =>
-            {
-                modeControl.AutoPower(true);
-            });
+            // spremi vrijednost
+            SavePower();
         }
 
 
         private void TrackPower_KeyUp(object? sender, KeyEventArgs e)
         {
-            Task.Run(() =>
-            {
-                modeControl.AutoPower(true);
-            });
+            // spremi
+            SavePower();
         }
 
         public void InitPowerPlan()
@@ -877,13 +870,24 @@ namespace GHelper
             string powerMode = PowerNative.GetPowerMode();
             bool batterySaver = PowerNative.GetBatterySaverStatus();
 
-            comboPowerMode.Enabled = !batterySaver;
+            // comboPowerMode.Enabled = !batterySaver;
 
-            if (batterySaver)
-                comboPowerMode.SelectedIndex = 0;
+            // if (batterySaver)
+            //     comboPowerMode.SelectedIndex = 0;
+            // else
+            comboPowerMode.SelectedValue = powerMode;
+
+            if (!CpuInfo.IsAMD)
+            {
+                int currentEpp = PowerNative.GetEPP();
+                textEPP.Text = currentEpp.ToString();
+                UpdateEppLabel(currentEpp);
+            }
             else
-                comboPowerMode.SelectedValue = powerMode;
-
+            {
+                textEPP.Enabled = false;
+                labelEPPValue.Text = "Not Supported";
+            }
         }
 
         private void ComboPowerMode_Changed(object? sender, EventArgs e)
@@ -897,6 +901,57 @@ namespace GHelper
                 AppConfig.RemoveMode("powermode");
         }
 
+        private void TextEPP_KeyPress(object? sender, KeyPressEventArgs e)
+        {
+            if (!char.IsControl(e.KeyChar) && !char.IsDigit(e.KeyChar))
+            {
+                e.Handled = true;
+            }
+
+            if (e.KeyChar == (char)Keys.Enter)
+            {
+                e.Handled = true;
+                UpdateEPP();
+            }
+        }
+
+        private void TextEPP_Leave(object? sender, EventArgs e)
+        {
+            UpdateEPP();
+        }
+
+        private void UpdateEPP()
+        {
+            if (int.TryParse(textEPP.Text, out int epp))
+            {
+                epp = Math.Clamp(epp, 0, 255);
+                textEPP.Text = epp.ToString();
+                PowerNative.SetEPP(epp);
+                UpdateEppLabel(epp);
+                AppConfig.SetMode("epp", epp);
+            }
+            else
+            {
+                int currentEpp = PowerNative.GetEPP();
+                textEPP.Text = currentEpp.ToString();
+                UpdateEppLabel(currentEpp);
+            }
+        }
+
+        private void UpdateEppLabel(int epp)
+        {
+            string desc = "Custom";
+            foreach (var kvp in PowerNative.eppPresets.OrderBy(k => Math.Abs(k.Key - epp)))
+            {
+                if (Math.Abs(kvp.Key - epp) <= 16)
+                {
+                    desc = kvp.Value;
+                    break;
+                }
+            }
+            labelEPPValue.Text = desc;
+        }
+
         private void ComboBoost_Changed(object? sender, EventArgs e)
         {
             if (AppConfig.GetMode("auto_boost") != comboBoost.SelectedIndex)
@@ -906,14 +961,13 @@ namespace GHelper
             AppConfig.SetMode("auto_boost", comboBoost.SelectedIndex);
         }
 
-        private void CheckApplyPower_Click(object? sender, EventArgs e)
+        private void ButtonApplyPower_Click(object? sender, EventArgs e)
         {
-            if (sender is null) return;
-            CheckBox chk = (CheckBox)sender;
-
-            AppConfig.SetMode("auto_apply_power", chk.Checked ? 1 : 0);
-            modeControl.SetPerformanceMode();
-
+            Task.Run(() =>
+            {
+                modeControl.SetPower(launchAsAdmin: true);
+                UpdatePowerLimitsVerification();
+            });
         }
 
         private void CheckApplyFans_Click(object? sender, EventArgs e)
@@ -932,7 +986,7 @@ namespace GHelper
 
             Invoke(delegate
             {
-                buttonCalibrate.Enabled = true;
+
                 SetAxis(chartCPU, AsusFan.CPU);
                 SetAxis(chartGPU, AsusFan.GPU);
                 if (chartMid.Visible) SetAxis(chartMid, AsusFan.Mid);
@@ -955,61 +1009,64 @@ namespace GHelper
             catch (ObjectDisposedException) { }
         }
 
+        public void UpdateLiveCpuPower(double power)
+        {
+            if (this.IsDisposed || !this.IsHandleCreated || this.Text == "") return;
 
+            try {
+                BeginInvoke(delegate
+                {
+                    labelLiveCpuPower.Text = power.ToString("F1") + "W";
+                });
+            }
+            catch (ObjectDisposedException) { }
+        }
         public void InitPower()
         {
+            bool hasControl = Program.acpi.IsSupported(AsusACPI.PPT_APUA0);
 
-            bool modeA = Program.acpi.IsSupported(AsusACPI.PPT_APUA0) || CpuInfo.IsAMD;
-            bool modeB0 = Program.acpi.IsAllAmdPPT();
-            bool modeC1 = Program.acpi.IsSupported(AsusACPI.PPT_APUC1);
+            panelTotal.Visible = hasControl;
+            panelApplyPower.Visible = hasControl; // prikazi apply btn
+            panelTitleCPU.Visible = hasControl;
 
-            panelTotal.Visible = modeA;
-            panelCPU.Visible = modeB0;
-
-            panelApplyPower.Visible = panelTitleCPU.Visible = modeA || modeB0 || modeC1;
-
-
-            // All AMD version has B0 but doesn't have C0 (Nvidia GPU) settings
-            if (modeB0)
+            if (hasControl)
             {
-                labelLeftTotal.Text = "Platform (CPU + GPU)";
-                labelLeftCPU.Text = "CPU";
-                panelFast.Visible = false;
-                panelSlow.Visible = false;
-            }
-            else
-            {
-                panelSlow.Visible = modeA;
-
-                if (CpuInfo.IsAMD)
+                if (!CpuInfo.IsAMD)
                 {
-                    labelLeftTotal.Text = "SPL (CPU sustained)";
-                    labelLeftSlow.Text = "sPPT (CPU long boost)";
-                    labelLeftFast.Text = "fPPT (CPU short boost)";
-                    panelFast.Visible = modeC1;
-
+                    // jedan limit
+                    labelLeftTotal.Text = "Power Limit";
+                    panelSlow.Visible = false;
+                    panelFast.Visible = false;
+                    panelCPU.Visible = false;
                 }
                 else
                 {
-                    labelLeftTotal.Text = "PL1 (CPU sustained)";
-                    labelLeftSlow.Text = "PL2 (CPU long boost)";
-                    panelFast.Visible = false;
+                    // odvojeni limiti
+                    labelLeftTotal.Text = "APU SPL";
+                    labelLeftSlow.Text = "APU sPPT";
+                    labelLeftFast.Text = "APU fPPT";
+                    panelSlow.Visible = true;
+                    panelFast.Visible = true;
+                    panelCPU.Visible = Program.acpi.IsAllAmdPPT();
                 }
-
+            }
+            else
+            {
+                panelSlow.Visible = false;
+                panelFast.Visible = false;
+                panelCPU.Visible = false;
             }
 
-            checkApplyPower.Checked = AppConfig.IsApplyPower();
+            // forsiraj auto primjenu
+            AppConfig.SetMode("auto_apply_power", 1);
 
             int limit_total = AppConfig.GetMode("limit_total", AsusACPI.DefaultTotal);
             int limit_slow = AppConfig.GetMode("limit_slow", limit_total);
-            int limit_fast = AppConfig.GetMode("limit_fast", limit_total);
+            int limit_fast = AppConfig.GetMode("limit_fast", limit_slow);
             int limit_cpu = AppConfig.GetMode("limit_cpu", AsusACPI.DefaultCPU);
 
             if (limit_total > AsusACPI.MaxTotal) limit_total = AsusACPI.MaxTotal;
             if (limit_total < AsusACPI.MinTotal) limit_total = AsusACPI.MinTotal;
-
-            if (limit_cpu > AsusACPI.MaxCPU) limit_cpu = AsusACPI.MaxCPU;
-            if (limit_cpu < AsusACPI.MinCPU) limit_cpu = AsusACPI.MinCPU;
 
             if (limit_slow > AsusACPI.MaxTotal) limit_slow = AsusACPI.MaxTotal;
             if (limit_slow < AsusACPI.MinTotal) limit_slow = AsusACPI.MinTotal;
@@ -1017,13 +1074,44 @@ namespace GHelper
             if (limit_fast > AsusACPI.MaxTotal) limit_fast = AsusACPI.MaxTotal;
             if (limit_fast < AsusACPI.MinTotal) limit_fast = AsusACPI.MinTotal;
 
+            if (limit_cpu > AsusACPI.MaxCPU) limit_cpu = AsusACPI.MaxCPU;
+            if (limit_cpu < AsusACPI.MinCPU) limit_cpu = AsusACPI.MinCPU;
+
             trackTotal.Value = limit_total;
-            trackSlow.Value = limit_slow;
+            // sinkroniziraj
+            trackSlow.Value = CpuInfo.IsAMD ? limit_slow : limit_total;
+            trackFast.Value = CpuInfo.IsAMD ? limit_fast : limit_total;
             trackCPU.Value = limit_cpu;
-            trackFast.Value = limit_fast;
 
             SavePower();
+            UpdatePowerLimitsVerification();
+        }
 
+        public void UpdatePowerLimitsVerification()
+        {
+            try
+            {
+                bool writeable = Program.acpi.VerifyCpuPowerLimitsWriteable();
+
+                BeginInvoke(delegate
+                {
+                    trackTotal.Enabled = writeable;
+                    trackSlow.Enabled = writeable;
+                    trackFast.Enabled = writeable;
+                    trackCPU.Enabled = writeable;
+
+                    Color labelColor = writeable ? ForeColor : Color.Gray;
+                    labelLeftTotal.ForeColor = labelColor;
+                    labelLeftSlow.ForeColor = labelColor;
+                    labelLeftFast.ForeColor = labelColor;
+                    labelLeftCPU.ForeColor = labelColor;
+                });
+            }
+            catch (ObjectDisposedException) { }
+            catch (Exception ex)
+            {
+                Logger.WriteLine($"[Fans] Error during UpdatePowerLimitsVerification: {ex.Message}");
+            }
         }
 
         private void SavePower()
@@ -1034,36 +1122,48 @@ namespace GHelper
             labelFast.Text = trackFast.Value.ToString() + "W";
 
             AppConfig.SetMode("limit_total", trackTotal.Value);
-            AppConfig.SetMode("limit_slow", trackSlow.Value);
+            // sinkroniziraj
+            AppConfig.SetMode("limit_slow", CpuInfo.IsAMD ? trackSlow.Value : trackTotal.Value);
             AppConfig.SetMode("limit_cpu", trackCPU.Value);
-            AppConfig.SetMode("limit_fast", trackFast.Value);
+            AppConfig.SetMode("limit_fast", CpuInfo.IsAMD ? trackFast.Value : trackTotal.Value);
         }
 
         private void TrackTotal_Scroll(object? sender, EventArgs e)
         {
-            if (trackTotal.Value > trackSlow.Value) trackSlow.Value = trackTotal.Value;
-            if (trackTotal.Value > trackFast.Value) trackFast.Value = trackTotal.Value;
-            if (trackTotal.Value < trackCPU.Value) trackCPU.Value = trackTotal.Value;
+            if (CpuInfo.IsAMD)
+            {
+                if (trackSlow.Value < trackTotal.Value) trackSlow.Value = trackTotal.Value;
+                if (trackFast.Value < trackSlow.Value) trackFast.Value = trackSlow.Value;
+                if (trackCPU.Value > trackTotal.Value) trackCPU.Value = trackTotal.Value;
+            }
             SavePower();
         }
 
         private void TrackSlow_Scroll(object? sender, EventArgs e)
         {
-            if (trackSlow.Value < trackTotal.Value) trackTotal.Value = trackSlow.Value;
-            if (trackSlow.Value > trackFast.Value) trackFast.Value = trackSlow.Value;
+            if (CpuInfo.IsAMD)
+            {
+                if (trackSlow.Value < trackTotal.Value) trackTotal.Value = trackSlow.Value;
+                if (trackSlow.Value > trackFast.Value) trackFast.Value = trackSlow.Value;
+            }
             SavePower();
         }
 
         private void TrackFast_Scroll(object? sender, EventArgs e)
         {
-            if (trackFast.Value < trackSlow.Value) trackSlow.Value = trackFast.Value;
-            if (trackFast.Value < trackTotal.Value) trackTotal.Value = trackFast.Value;
+            if (CpuInfo.IsAMD)
+            {
+                if (trackFast.Value < trackSlow.Value) trackSlow.Value = trackFast.Value;
+            }
             SavePower();
         }
 
         private void TrackCPU_Scroll(object? sender, EventArgs e)
         {
-            if (trackCPU.Value > trackTotal.Value) trackTotal.Value = trackCPU.Value;
+            if (CpuInfo.IsAMD)
+            {
+                if (trackCPU.Value > trackTotal.Value) trackTotal.Value = trackCPU.Value;
+            }
             SavePower();
         }
 
@@ -1208,14 +1308,14 @@ namespace GHelper
                 LoadProfile(seriesXGM, AsusFan.XGM, true);
 
             checkApplyFans.Checked = false;
-            checkApplyPower.Checked = false;
+
             seriesCPU.Color = Color.Gray;
             seriesGPU.Color = Color.Gray;
             seriesMid.Color = Color.Gray;
             seriesXGM.Color = Color.Gray;
 
             AppConfig.SetMode("auto_apply", 0);
-            AppConfig.SetMode("auto_apply_power", 0);
+            AppConfig.SetMode("auto_apply_power", 1); // uvijek on
 
             trackUV.Value = CpuInfo.MaxCPUUV;
             trackUViGPU.Value = CpuInfo.MaxIGPUUV;

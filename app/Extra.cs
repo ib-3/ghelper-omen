@@ -1,4 +1,4 @@
-﻿using GHelper.Display;
+using GHelper.Display;
 using GHelper.Gpu.AMD;
 using GHelper.Helpers;
 using GHelper.Input;
@@ -422,6 +422,12 @@ namespace GHelper
             checkGpuApps.Checked = AppConfig.Is("kill_gpu_apps");
             checkGpuApps.CheckedChanged += CheckGpuApps_CheckedChanged;
 
+            checkDonate.Checked = !AppConfig.Is("hide_donate_button");
+            checkDonate.CheckedChanged += (s, e) =>
+            {
+                AppConfig.Set("hide_donate_button", checkDonate.Checked ? 0 : 1);
+            };
+
             int bootSound = Program.acpi.DeviceGet(AsusACPI.BootSound);
             if (bootSound < 0 || bootSound > UInt16.MaxValue) bootSound = AppConfig.Get("boot_sound", 0);
 
@@ -468,7 +474,9 @@ namespace GHelper
 
             InitACPITesting();
 
+
         }
+
 
         private void CheckKeystoneSoundCheckedChanged(object? sender, EventArgs e)
         {

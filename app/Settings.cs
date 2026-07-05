@@ -1662,6 +1662,8 @@ namespace GHelper
 
 
             if (Program.trayIcon is not null) Program.trayIcon.Text = trayTip;
+
+            Gpu.DGpuWakeWatchdog.Check();
         }
 
         public void LabelFansResult(string text)

@@ -669,8 +669,8 @@ namespace OmenCore.Hardware
             {
                 bool success;
                 
-                // If both are 100%, use SetFanMax for true maximum
-                if (cpuPercent >= 100 && gpuPercent >= 100)
+                // If either fan is at 100%, use SetFanMax for true maximum (crucial for single-fan laptops like Victus)
+                if (cpuPercent >= 100 || gpuPercent >= 100)
                 {
                     success = _wmiBios.SetFanMax(true);
                     if (success)
@@ -715,7 +715,7 @@ namespace OmenCore.Hardware
                 if (success)
                 {
                     IsManualControlActive = true;
-                    _isMaxModeActive = cpuPercent >= 100 && gpuPercent >= 100;
+                    _isMaxModeActive = cpuPercent >= 100 || gpuPercent >= 100;
                     _lastManualFanPercent = Math.Max(cpuPercent, gpuPercent);
                     _lastManualModeReapplyUtc = DateTime.UtcNow;
                     StartCountdownExtension();

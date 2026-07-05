@@ -235,6 +235,11 @@ namespace GHelper
 
             checkNoOverdrive.Visible = Program.acpi.IsOverdriveSupported();
 
+            if (Program.acpi.IsOmen())
+            {
+                labelM3.Text = "M3 / Omen";
+            }
+
             // Change text and hide irrelevant options on the ROG Ally,
             // which is a bit of a special case piece of hardware.
             if (AppConfig.IsAlly())

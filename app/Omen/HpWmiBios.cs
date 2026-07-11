@@ -50,6 +50,7 @@ namespace OmenCore.Hardware
         private int _consecutiveFailures = 0;
         private const int MaxConsecutiveFailures = 5;
         private bool _wmiCommandsDisabled = false;
+        private DateTime _lastWmiFailureUtc = DateTime.MinValue;
         
         // BIOS Reliability Tracking (v2.7.0)
         private long _totalCommandAttempts = 0;
@@ -101,6 +102,8 @@ namespace OmenCore.Hardware
         private const uint CMD_FAN_MAX_GET = 0x26;    // GetMaxFan (OmenMon 0x26)
         private const uint CMD_FAN_MAX_SET = 0x27;    // SetMaxFan (OmenMon 0x27)
         private const uint CMD_SYSTEM_GET_DATA = 0x28;
+        private const uint CMD_POWER_LIMIT_SET = 0x29;  // SetPowerLimit (Omen 0x29 / 41)
+        private const uint CMD_POWER_LIMIT_2BYTE = 0x37; // SetPowerLimit2Byte (Omen 0x37 / 55)
         private const uint CMD_GPU_GET_POWER = 0x21;  // GetGpuPower (OmenMon 0x21)
         private const uint CMD_GPU_SET_POWER = 0x22;  // SetGpuPower (OmenMon 0x22)
         private const uint CMD_GPU_GET_MODE = 0x52;   // GetGpuMode - uses Legacy cmd
@@ -117,6 +120,14 @@ namespace OmenCore.Hardware
         private const uint CMD_BATTERY_CARE = 0x24;   // Battery care mode (charge limit)
         private const uint CMD_OVERDRIVE_GET = 0x35;  // GetOverdrive - display overdrive status
         private const uint CMD_OVERDRIVE_SET = 0x36;  // SetOverdrive - enable/disable display overdrive
+
+        // Lightbar control subtypes (BiosCmd.Default / 0x20008 / 131080)
+        // Reference: OGH OmenHsaConsts.WMI_CMD_LED_LIGHT_BAR_* constants
+        private const uint CMD_LIGHTBAR_GET_SUPPORT    = 0x01; // GetPlatformSupport → (byte[0]>>1)&1 == 1
+        private const uint CMD_LIGHTBAR_GET_RGB        = 0x04; // GetLightingRgb → 128-byte: [0]=zoneCount, then R,G,B per zone
+        private const uint CMD_LIGHTBAR_SET_RGB        = 0x05; // SetLightingRgb → 128-byte payload
+        private const uint CMD_LIGHTBAR_SET_BRIGHTNESS = 0x07; // SetBrightness → {brightness,0,0,0}
+        private const uint CMD_LIGHTBAR_SET_ANIMATION  = 0x09; // SetAnimationMode → same 128-byte animation layout
 
         /// <summary>
         /// Fan performance mode enumeration.
@@ -989,6 +1000,61 @@ namespace OmenCore.Hardware
         }
 
         /// <summary>
+        /// Set CPU Power Limits (PL1/PL2) using native OMEN WMI commands.
+        /// </summary>
+        public bool SetCpuPowerLimit(int pl1, int pl2)
+        {
+            if (!_isAvailable) return false;
+
+            try
+            {
+                if (pl1 > 254 || pl2 > 254)
+                {
+                    // Use two-byte command (0x37 / 55) for limits > 254W
+                    byte[] data = new byte[128];
+                    data[0] = 32;
+                    data[1] = 0;
+                    data[2] = byte.MaxValue; // PL4 LSB
+                    data[3] = byte.MaxValue; // PL4 MSB
+                    data[4] = 0;
+                    data[5] = 0;
+                    data[6] = (byte)(pl2 & 0xFF);
+                    data[7] = (byte)((pl2 >> 8) & 0xFF);
+                    data[8] = 0;
+                    data[9] = 0;
+                    data[10] = (byte)(pl1 & 0xFF);
+                    data[11] = (byte)((pl1 >> 8) & 0xFF);
+                    data[12] = 0;
+                    data[13] = 0;
+
+                    _logging?.Info($"Sending Two-Byte CPU power limit command: PL1={pl1}W, PL2={pl2}W");
+                    var result = SendBiosCommand(BiosCmd.Default, CMD_POWER_LIMIT_2BYTE, data, 0);
+                    return result != null;
+                }
+                else
+                {
+                    // Use one-byte command (0x29 / 41) for standard limits
+                    // OGH's code passes 255 for PL2 on Intel, but passing our value might work on some BIOSes.
+                    // If it fails on Intel, it will just be ignored by the BIOS.
+                    byte[] data = new byte[4];
+                    data[0] = (byte)pl2;
+                    data[1] = (byte)pl1;
+                    data[2] = 255; // PL4
+                    data[3] = 255; // Concurrent TDP
+
+                    _logging?.Info($"Sending One-Byte CPU power limit command: PL1={pl1}W, PL2={pl2}W");
+                    var result = SendBiosCommand(BiosCmd.Default, CMD_POWER_LIMIT_SET, data, 0);
+                    return result != null;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logging?.Error($"Failed to set CPU power limit via WMI: {ex.Message}", ex);
+                return false;
+            }
+        }
+
+        /// <summary>
         /// Get GPU mode (Hybrid/Discrete/Optimus).
         /// OmenMon: Cmd.Legacy, 0x52 (returns BIOS error 4 on unsupported)
         /// </summary>
@@ -1459,6 +1525,181 @@ namespace OmenCore.Hardware
             return false;
         }
 
+        #region LightBar
+        // ──────────────────────────────────────────────────────────────────────
+        // Light-bar WMI commands (BiosCmd.Default / 0x20008)
+        // Reference: OGH OmenHsaConsts / OmenHsaClient.BiosLightBarWmiCmd_*
+        // ──────────────────────────────────────────────────────────────────────
+
+        /// <summary>
+        /// Probe whether the platform has a light bar and detect zone count.
+        /// Mirrors OGH BiosLightBarWmiCmd_GetPlatformSupport() + GetLightingRgb().
+        /// Returns (supported, zoneCount).
+        /// </summary>
+        public (bool supported, int zoneCount) LightBarProbeSupport()
+        {
+            if (!_isAvailable) return (false, 0);
+
+            try
+            {
+                // TYPE 1 — support check: bit 1 of byte[0]
+                var supportResult = SendBiosCommand(BiosCmd.Default, CMD_LIGHTBAR_GET_SUPPORT, null, 4);
+                if (supportResult == null || supportResult.Length == 0)
+                {
+                    _logging?.Info("LightBar: support probe returned null → no lightbar");
+                    return (false, 0);
+                }
+
+                bool supported = ((supportResult[0] >> 1) & 1) == 1;
+                if (!supported)
+                {
+                    _logging?.Info($"LightBar: not supported (raw byte[0]=0x{supportResult[0]:X2})");
+                    return (false, 0);
+                }
+
+                // TYPE 4 — read current RGB to get zone count from byte[0]
+                var rgbResult = SendBiosCommand(BiosCmd.Default, CMD_LIGHTBAR_GET_RGB, null, 128);
+                int zones = 1;
+                if (rgbResult != null && rgbResult.Length > 0 && rgbResult[0] > 0)
+                {
+                    zones = rgbResult[0];
+                }
+
+                _logging?.Info($"✓ LightBar: supported, zones={zones}");
+                return (true, zones);
+            }
+            catch (Exception ex)
+            {
+                _logging?.Warn($"LightBarProbeSupport failed: {ex.Message}");
+                return (false, 0);
+            }
+        }
+
+        /// <summary>
+        /// Read current light-bar RGB state.
+        /// Returns 128-byte buffer: byte[0]=zoneCount, then R,G,B per zone.
+        /// </summary>
+        public byte[]? LightBarGetRgb()
+        {
+            if (!_isAvailable) return null;
+            try
+            {
+                return SendBiosCommand(BiosCmd.Default, CMD_LIGHTBAR_GET_RGB, null, 128);
+            }
+            catch (Exception ex)
+            {
+                _logging?.Warn($"LightBarGetRgb failed: {ex.Message}");
+                return null;
+            }
+        }
+
+        /// <summary>
+        /// Set light-bar zone colours.
+        /// Payload: byte[0] = zoneCount, then R,G,B for each zone (128 bytes total).
+        /// </summary>
+        /// <param name="zoneColors">Array of colours, one per zone.</param>
+        public bool LightBarSetRgb(System.Drawing.Color[] zoneColors)
+        {
+            if (!_isAvailable)
+            {
+                _logging?.Warn("Cannot set lightbar RGB: WMI BIOS not available");
+                return false;
+            }
+            if (zoneColors == null || zoneColors.Length == 0)
+            {
+                _logging?.Warn("LightBarSetRgb: no colours provided");
+                return false;
+            }
+
+            try
+            {
+                var data = new byte[128];
+                data[0] = (byte)Math.Min(zoneColors.Length, 40); // zone count
+                for (int z = 0; z < data[0] && (1 + z * 3 + 2) < 128; z++)
+                {
+                    data[1 + z * 3]     = zoneColors[z].R;
+                    data[1 + z * 3 + 1] = zoneColors[z].G;
+                    data[1 + z * 3 + 2] = zoneColors[z].B;
+                }
+
+                var result = SendBiosCommand(BiosCmd.Default, CMD_LIGHTBAR_SET_RGB, data, 0);
+                if (result != null)
+                {
+                    _logging?.Info($"✓ LightBar RGB set ({zoneColors.Length} zones)");
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logging?.Error($"LightBarSetRgb failed: {ex.Message}", ex);
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Set all light-bar zones to a single solid colour.
+        /// </summary>
+        public bool LightBarSetStaticColor(System.Drawing.Color color, int zoneCount = 1)
+        {
+            var colors = new System.Drawing.Color[Math.Max(1, zoneCount)];
+            for (int i = 0; i < colors.Length; i++) colors[i] = color;
+            return LightBarSetRgb(colors);
+        }
+
+        /// <summary>
+        /// Set light-bar brightness (0–100).
+        /// </summary>
+        public bool LightBarSetBrightness(byte brightness)
+        {
+            if (!_isAvailable) return false;
+            try
+            {
+                var data = new byte[4] { brightness, 0, 0, 0 };
+                var result = SendBiosCommand(BiosCmd.Default, CMD_LIGHTBAR_SET_BRIGHTNESS, data, 0);
+                if (result != null)
+                {
+                    _logging?.Info($"✓ LightBar brightness={brightness}");
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logging?.Warn($"LightBarSetBrightness failed: {ex.Message}");
+            }
+            return false;
+        }
+
+        /// <summary>
+        /// Apply an animation effect to the light bar.
+        /// Uses the same 128-byte WMI_LedAnimation layout as keyboard type-7 commands.
+        /// </summary>
+        /// <param name="animationPayload">128-byte animation payload.</param>
+        public bool LightBarSetAnimation(byte[] animationPayload)
+        {
+            if (!_isAvailable) return false;
+            if (animationPayload == null || animationPayload.Length == 0)
+            {
+                _logging?.Warn("LightBarSetAnimation: empty payload");
+                return false;
+            }
+            try
+            {
+                var result = SendBiosCommand(BiosCmd.Default, CMD_LIGHTBAR_SET_ANIMATION, animationPayload, 0);
+                if (result != null)
+                {
+                    _logging?.Info($"✓ LightBar animation applied (mode={animationPayload[1]})");
+                    return true;
+                }
+            }
+            catch (Exception ex)
+            {
+                _logging?.Error($"LightBarSetAnimation failed: {ex.Message}", ex);
+            }
+            return false;
+        }
+
+        #endregion
+
         #region Display Overdrive
 
         /// <summary>
@@ -1546,8 +1787,24 @@ namespace OmenCore.Hardware
                 return SendBiosCommandLegacy(command, commandType, inData, outDataSize);
             }
             
-            if (_cimSession == null || _biosMethods == null || _wmiCommandsDisabled)
+            if (_cimSession == null || _biosMethods == null)
                 return null;
+                
+            if (_wmiCommandsDisabled)
+            {
+                // Auto-recover from disabled state after 10 seconds to prevent permanent lockout
+                // and avoid thermal throttling during temporary WMI hangs
+                if ((DateTime.UtcNow - _lastWmiFailureUtc).TotalSeconds > 10)
+                {
+                    _wmiCommandsDisabled = false;
+                    _consecutiveFailures = 0;
+                    _logging?.Info("Auto-recovering WMI BIOS commands after 10s cooldown period.");
+                }
+                else
+                {
+                    return null;
+                }
+            }
                 
             // Initialize the output variable
             var outData = new byte[outDataSize];
@@ -1650,6 +1907,7 @@ namespace OmenCore.Hardware
             if (_consecutiveFailures >= MaxConsecutiveFailures && !_wmiCommandsDisabled)
             {
                 _wmiCommandsDisabled = true;
+                _lastWmiFailureUtc = DateTime.UtcNow;
                 _logging?.Warn($"WMI BIOS commands disabled after {MaxConsecutiveFailures} consecutive failures.");
             }
             

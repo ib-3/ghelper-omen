@@ -1848,6 +1848,7 @@ namespace OmenCore.Hardware
             catch (Exception ex)
             {
                 _logging?.Warn($"[WmiBiosMonitor] {nameof(GetBatteryDischargeRate)} failed: {ex.Message}");
+                _batteryMonitoringDisabled = true;
             }
             return 0;
         }

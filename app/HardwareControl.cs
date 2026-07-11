@@ -309,6 +309,8 @@ public static class HardwareControl
     }
 
     static long _lastBatteryRead;
+    static long _lastCapacityTime = 0;
+    static decimal _lastCapacity = 0;
 
     public static void ReadBatteryState()
     {
@@ -354,6 +356,34 @@ public static class HardwareControl
                 chargeCapacity = directStatus.Value.Capacity;
                 if (directStatus.Value.Rate != 0)
                     batteryRate = (decimal)directStatus.Value.Rate / 1000;
+            }
+
+            // [NEW] Manual calculation fallback for models that don't support rate querying
+            if (batteryRate == 0 && chargeCapacity > 0)
+            {
+                if (_lastCapacity > 0 && _lastCapacityTime > 0)
+                {
+                    long timeDiff = now - _lastCapacityTime;
+                    if (timeDiff >= 10000) // Minimum 10 seconds difference for accuracy
+                    {
+                        decimal capacityDiff = _lastCapacity - chargeCapacity.Value;
+                        batteryRate = capacityDiff * 3600m / timeDiff;
+                        
+                        _lastCapacity = chargeCapacity.Value;
+                        _lastCapacityTime = now;
+                    }
+                }
+                else
+                {
+                    _lastCapacity = chargeCapacity.Value;
+                    _lastCapacityTime = now;
+                }
+            }
+            else if (chargeCapacity > 0)
+            {
+                 // Keep updating values so if IOCTL randomly fails next time, we have a recent delta
+                 _lastCapacity = chargeCapacity.Value;
+                 _lastCapacityTime = now;
             }
 
             // MaxCapacity doesn't change at runtime, only need it once

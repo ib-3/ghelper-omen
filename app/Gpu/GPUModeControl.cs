@@ -86,48 +86,16 @@ namespace GHelper.Gpu
 
             int status;
 
-            if (CurrentGPU == AsusACPI.GPUModeUltimate)
+            if (GPUMode == AsusACPI.GPUModeUltimate || GPUMode == AsusACPI.GPUModeStandard)
             {
-                DialogResult dialogResult = MessageBox.Show(Properties.Strings.AlertUltimateOff, Properties.Strings.AlertUltimateTitle, MessageBoxButtons.YesNo);
-                if (dialogResult == DialogResult.Yes)
-                {
-                    status = Program.acpi.DeviceSet(AsusACPI.GPUMux, 1, "GPUMux");
-                    restart = true;
-                    changed = true;
-                }
-            }
-            else if (GPUMode == AsusACPI.GPUModeUltimate)
-            {
-                DialogResult dialogResult = MessageBox.Show(Properties.Strings.AlertUltimateOn, Properties.Strings.AlertUltimateTitle, MessageBoxButtons.YesNo);
-                if (dialogResult == DialogResult.Yes)
-                {
-                    Program.acpi.SetGPUEco(0);
-                    Thread.Sleep(500);
-
-                    int eco = Program.acpi.DeviceGet(AsusACPI.GPUEco);
-                    Logger.WriteLine("Eco flag : " + eco);
-                    if (eco == 1)
-                    {
-                        settings.VisualiseGPUMode();
-                        return;
-                    }
-
-                    status = Program.acpi.DeviceSet(AsusACPI.GPUMux, 0, "GPUMux");
-                    restart = true;
-                    changed = true;
-                }
-
+                settings.VisualiseGPUMode(GPUMode);
+                SetGPUEco(0);
+                changed = true;
             }
             else if (GPUMode == AsusACPI.GPUModeEco)
             {
                 settings.VisualiseGPUMode(GPUMode);
                 SetGPUEco(1);
-                changed = true;
-            }
-            else if (GPUMode == AsusACPI.GPUModeStandard)
-            {
-                settings.VisualiseGPUMode(GPUMode);
-                SetGPUEco(0);
                 changed = true;
             }
 

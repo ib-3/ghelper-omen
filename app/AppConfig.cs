@@ -16,7 +16,7 @@ public static class AppConfig
 
     static AppConfig()
     {
-        string configName = "config.json";
+        string configName = "config_v2.json";
         string appPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GHelper");
         string startupConfig = Path.Combine(Application.StartupPath.Trim('\\'), configName);
 
@@ -156,6 +156,8 @@ public static class AppConfig
     {
         config = new Dictionary<string, object>();
         config["performance_mode"] = 0;
+        config["kill_gpu_apps"] = 1;
+        config["nv_platform"] = 1;
         string jsonString = JsonSerializer.Serialize(config);
         File.WriteAllText(configFile, jsonString);
     }

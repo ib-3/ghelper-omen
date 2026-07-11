@@ -1033,9 +1033,10 @@ namespace GHelper
             {
                 if (!CpuInfo.IsAMD)
                 {
-                    // jedan limit
-                    labelLeftTotal.Text = "Power Limit";
-                    panelSlow.Visible = false;
+                    // Two limits (PL1 and PL2) using OMEN WMI
+                    labelLeftTotal.Text = "PL1 (Sustained)";
+                    labelLeftSlow.Text = "PL2 (Boost)";
+                    panelSlow.Visible = true;
                     panelFast.Visible = false;
                     panelCPU.Visible = false;
                 }
@@ -1123,7 +1124,7 @@ namespace GHelper
 
             AppConfig.SetMode("limit_total", trackTotal.Value);
             // sinkroniziraj
-            AppConfig.SetMode("limit_slow", CpuInfo.IsAMD ? trackSlow.Value : trackTotal.Value);
+            AppConfig.SetMode("limit_slow", trackSlow.Value);
             AppConfig.SetMode("limit_cpu", trackCPU.Value);
             AppConfig.SetMode("limit_fast", CpuInfo.IsAMD ? trackFast.Value : trackTotal.Value);
         }

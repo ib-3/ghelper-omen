@@ -40,6 +40,7 @@ namespace GHelper
         public Extra? extraForm;
         public Updates? updatesForm;
         public Handheld? handheldForm;
+        public OmenLightingForm? omenLightingForm;
 
         static long lastRefresh;
         static long lastBatteryRefresh;
@@ -1183,6 +1184,22 @@ namespace GHelper
                 return;
             }
 
+            // ── OMEN WMI lighting: open the dedicated control form ────────
+            var lightingSvc = Program.acpi?.GetLightingService();
+            if (lightingSvc != null)
+            {
+                if (omenLightingForm == null || omenLightingForm.IsDisposed)
+                {
+                    omenLightingForm = new OmenLightingForm(lightingSvc);
+                    AddOwnedForm(omenLightingForm);
+                }
+                if (omenLightingForm.Visible)
+                    omenLightingForm.Focus();
+                else
+                    omenLightingForm.Show();
+                return;
+            }
+
             SetColorPicker("aura_color");
         }
 
@@ -1662,6 +1679,8 @@ namespace GHelper
 
 
             if (Program.trayIcon is not null) Program.trayIcon.Text = trayTip;
+
+            Gpu.DGpuWakeWatchdog.Check();
         }
 
         public void LabelFansResult(string text)

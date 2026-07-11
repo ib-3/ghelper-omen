@@ -69,7 +69,10 @@ namespace GHelper.Mode
         private void ReapplyTimer_Elapsed(object? sender, System.Timers.ElapsedEventArgs e)
         {
             // Periodically re-apply power limits and undervolt to prevent OEM firmware from resetting them
-            if (AppConfig.IsApplyPower()) SetPower();
+            // [OMEN PORT]: Disabled SetPower() polling. HP firmware generally doesn't reset MSRs every few seconds, 
+            // and constant polling locks up WMI/PawnIO leading to log spam and fan control failure.
+            // if (AppConfig.IsApplyPower()) SetPower();
+            
             if (AppConfig.IsApplyUV())
             {
                 SetCPUTemp(AppConfig.GetMode("cpu_temp"));

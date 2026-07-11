@@ -13,7 +13,7 @@ namespace GHelper.AutoUpdate
 
         SettingsForm settings;
 
-        public string versionUrl = "https://github.com/ivanb/omencore";
+        public string versionUrl = "https://github.com/ib-3/ghelper-omen";
         public bool update = false;
 
         static long lastUpdate;
@@ -27,8 +27,10 @@ namespace GHelper.AutoUpdate
 
         public void CheckForUpdates()
         {
-            // Disabled to prevent overwriting OMEN fork with standard GHelper
-            return;
+            Task.Run(() =>
+            {
+                CheckForUpdatesAsync();
+            });
         }
 
         public void Update()
@@ -59,8 +61,54 @@ namespace GHelper.AutoUpdate
 
         async void CheckForUpdatesAsync(bool force = false)
         {
-            // Disabled
-            return;
+            try
+            {
+                using (var client = new HttpClient())
+                {
+                    client.DefaultRequestHeaders.Add("User-Agent", "G-Helper App");
+                    var response = await client.GetStringAsync("https://api.github.com/repos/ib-3/ghelper-omen/releases/latest");
+                    using (JsonDocument document = JsonDocument.Parse(response))
+                    {
+                        var root = document.RootElement;
+                        var tagName = root.GetProperty("tag_name").GetString();
+                        if (tagName != null)
+                        {
+                            var latestVersionStr = tagName.Replace("v", "");
+                            var latestVersion = new Version(latestVersionStr);
+                            var currentVersion = Assembly.GetExecutingAssembly().GetName().Version;
+                            
+                            if (currentVersion != null && latestVersion > currentVersion)
+                            {
+                                update = true;
+                                settings.Invoke(delegate
+                                {
+                                    settings.SetVersionLabel(Properties.Strings.VersionLabel + $": {latestVersion.Major}.{latestVersion.Minor}.{latestVersion.Build} (Available)", true);
+                                });
+                                
+                                if (force)
+                                {
+                                    var assets = root.GetProperty("assets");
+                                    if (assets.GetArrayLength() > 0)
+                                    {
+                                        var downloadUrl = assets[0].GetProperty("browser_download_url").GetString();
+                                        if (downloadUrl != null)
+                                            AutoUpdate(downloadUrl);
+                                    }
+                                }
+                            }
+                            else if (force)
+                            {
+                                LoadReleases();
+                            }
+                        }
+                    }
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLine("Failed to check for updates: " + ex.Message);
+                if (force) LoadReleases();
+            }
         }
 
         public static string EscapeString(string input)

@@ -30,7 +30,8 @@ namespace OmenCore.Hardware
         // Manual fan control state
         private HpWmiBios.FanMode _lastMode = HpWmiBios.FanMode.Default;
         private bool _isMaxModeActive = false;  // Track if SetFanMax(true) is active
-        private int _lastManualFanPercent = -1; // Track last manual fan percentage for re-apply
+        private int _lastManualCpuPercent = -1; // Track last manual CPU fan percentage for re-apply
+        private int _lastManualGpuPercent = -1; // Track last manual GPU fan percentage for re-apply
         
         // Fan level constants - HP WMI uses 0-55 krpm range (0-5500 RPM) on classic models,
         // or 0-100 percentage on newer models. Auto-detected from WMI at startup.
@@ -342,7 +343,8 @@ namespace OmenCore.Hardware
                     // Ensure we don't leave UI thinking Max is active
                     IsManualControlActive = false;
                     _isMaxModeActive = false;
-                    _lastManualFanPercent = -1;
+                    _lastManualCpuPercent = -1;
+                    _lastManualGpuPercent = -1;
                     return false;
                 }
                 
@@ -375,7 +377,8 @@ namespace OmenCore.Hardware
                     _lastMode = mode;
                     IsManualControlActive = false;
                     _isMaxModeActive = false;          // Clear max mode flag
-                    _lastManualFanPercent = -1;
+                    _lastManualCpuPercent = -1;
+                    _lastManualGpuPercent = -1;
                     
                     // Start/stop countdown extension based on mode
                     if (isAutoPreset || mode == HpWmiBios.FanMode.Default || mode == HpWmiBios.FanMode.LegacyDefault)
@@ -445,7 +448,8 @@ namespace OmenCore.Hardware
         {
             IsManualControlActive = true;
             _isMaxModeActive = true;
-            _lastManualFanPercent = 100;
+                _lastManualCpuPercent = 100;
+                _lastManualGpuPercent = 100;
             _lastMaxModeMaintenanceUtc = DateTime.MinValue;
             _maxModeLowTelemetryStreak = 0;
             _maxModeTelemetryUnavailableStreak = 0;
@@ -499,6 +503,7 @@ namespace OmenCore.Hardware
                 if (_wmiBios.SetFanLevel(fanLevel, fanLevel))
                 {
                     IsManualControlActive = true;
+                    _isMaxModeActive = false; // Prevent Max profile background timer from overriding custom curve
                     _logging?.Info($"✓ Custom curve applied: {targetPoint.FanPercent}% @ {maxTemp}°C (Level: {fanLevel})");
                     return true;
                 }
@@ -595,7 +600,8 @@ namespace OmenCore.Hardware
                     {
                         IsManualControlActive = true;
                         _isMaxModeActive = percent >= 100;  // Track if we're at max
-                        _lastManualFanPercent = percent;     // Track for re-apply
+                        _lastManualCpuPercent = percent;     // Track for re-apply
+                        _lastManualGpuPercent = percent;
                         _lastManualModeReapplyUtc = DateTime.UtcNow;
                         
                         // Start countdown extension to prevent BIOS from reverting
@@ -669,8 +675,8 @@ namespace OmenCore.Hardware
             {
                 bool success;
                 
-                // If both are 100%, use SetFanMax for true maximum
-                if (cpuPercent >= 100 && gpuPercent >= 100)
+                // If either fan is at 100%, use SetFanMax for true maximum (crucial for single-fan laptops like Victus)
+                if (cpuPercent >= 100 || gpuPercent >= 100)
                 {
                     success = _wmiBios.SetFanMax(true);
                     if (success)
@@ -715,8 +721,9 @@ namespace OmenCore.Hardware
                 if (success)
                 {
                     IsManualControlActive = true;
-                    _isMaxModeActive = cpuPercent >= 100 && gpuPercent >= 100;
-                    _lastManualFanPercent = Math.Max(cpuPercent, gpuPercent);
+                    _isMaxModeActive = cpuPercent >= 100 || gpuPercent >= 100;
+                    _lastManualCpuPercent = cpuPercent;
+                    _lastManualGpuPercent = gpuPercent;
                     _lastManualModeReapplyUtc = DateTime.UtcNow;
                     StartCountdownExtension();
                 }
@@ -752,7 +759,8 @@ namespace OmenCore.Hardware
             {
                 IsManualControlActive = true;
                 _isMaxModeActive = true;
-                _lastManualFanPercent = 100;
+                    _lastManualCpuPercent = 100;
+                _lastManualGpuPercent = 100;
                 _lastMaxModeMaintenanceUtc = DateTime.MinValue;
                 _maxModeLowTelemetryStreak = 0;
                 _maxModeTelemetryUnavailableStreak = 0;
@@ -761,7 +769,8 @@ namespace OmenCore.Hardware
             else
             {
                 _isMaxModeActive = false;
-                _lastManualFanPercent = -1;
+                _lastManualCpuPercent = -1;
+                _lastManualGpuPercent = -1;
                 _maxModeLowTelemetryStreak = 0;
                 _maxModeTelemetryUnavailableStreak = 0;
 
@@ -805,7 +814,8 @@ namespace OmenCore.Hardware
                 _lastMode = fanMode;
                 IsManualControlActive = false;
                 _isMaxModeActive = false;
-                _lastManualFanPercent = -1;
+                _lastManualCpuPercent = -1;
+                _lastManualGpuPercent = -1;
                 _lastPresetModeReapplyUtc = DateTime.UtcNow;
                 
                 // Start/stop countdown extension to prevent BIOS from reverting
@@ -880,7 +890,8 @@ namespace OmenCore.Hardware
                 {
                     IsManualControlActive = false;
                     _isMaxModeActive = false;
-                    _lastManualFanPercent = -1;
+                    _lastManualCpuPercent = -1;
+                    _lastManualGpuPercent = -1;
                     _lastMode = HpWmiBios.FanMode.Default;
 
                     // V1 auto-mode floor clear (GitHub #100 Bug #4):
@@ -1639,7 +1650,7 @@ namespace OmenCore.Hardware
                                 GetCurrentFanRpm());
                         }
                     }
-                    else if (IsManualControlActive && _lastManualFanPercent >= 0)
+                    else if (IsManualControlActive && _lastManualCpuPercent >= 0 && _lastManualGpuPercent >= 0)
                     {
                         var nowUtc = DateTime.UtcNow;
                         if ((nowUtc - _lastManualModeReapplyUtc).TotalMilliseconds < ManualModeReapplyIntervalMs)
@@ -1648,14 +1659,15 @@ namespace OmenCore.Hardware
                             return;
                         }
 
-                        // For custom fan curves, re-apply the last set percentage
-                        byte fanLevel = (byte)(_lastManualFanPercent * _maxFanLevel / 100);
-                        if (_wmiBios.SetFanLevel(fanLevel, fanLevel))
+                        // For custom fan curves, re-apply the last set percentages independently
+                        byte cpuLevel = (byte)(_lastManualCpuPercent * _maxFanLevel / 100);
+                        byte gpuLevel = (byte)(_lastManualGpuPercent * _maxFanLevel / 100);
+                        if (_wmiBios.SetFanLevel(cpuLevel, gpuLevel))
                         {
                             _lastManualModeReapplyUtc = nowUtc;
                             var count = Interlocked.Increment(ref _keepaliveWriteCount);
                             if (count % KeepaliveLogSummaryInterval == 1)
-                                _logging?.Info($"[FanKeepalive] Fan level keepalive active: {_lastManualFanPercent}% (write #{count})");
+                                _logging?.Info($"[FanKeepalive] Fan level keepalive active: CPU={_lastManualCpuPercent}%, GPU={_lastManualGpuPercent}% (write #{count})");
                         }
                     }
                     else

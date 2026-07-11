@@ -9,20 +9,25 @@ A lightweight, independent alternative to HP Omen Gaming Hub for HP OMEN (and co
 
 ## 🚀 Why G-Helper Omen?
 
-Official manufacturer software suites are often heavy, resource-intensive, and rely on multiple background services. G-Helper Omen aims to provide the same (or better) tuning capabilities inside a single, lightweight executable that consumes minimal RAM and zero background CPU when idle.
+Official manufacturer software suites are often heavy, resource-intensive, and rely on multiple background services. G-Helper Omen provides the same powerful tuning capabilities inside a single, lightweight executable that consumes minimal RAM and zero background CPU when idle.
+
+**The WMI Advantage:** With the release of version 0.2.0, G-Helper Omen has completely shifted its primary architecture to use HP's native Windows Management Instrumentation (WMI) interface (`hpqBIOSInt128`) instead of raw Embedded Controller (EC) manipulation. This means:
+1. **Official Compatibility:** The app now communicates with your hardware the *exact* same way the official OMEN Gaming Hub does.
+2. **Maximum Safety:** No more fighting with anti-cheat software over unsigned drivers or kernel ring0 access for basic fan speeds.
+3. **Seamless Integration:** WMI respects your laptop's built-in BIOS thermal limits and power envelopes, preventing unexpected thermal throttling or system lockups.
 
 ---
 
 ## ⚡ Key Features
 
-- **Performance & Thermal Profiles:** Switch between Silent, Balanced, and Turbo modes directly mapped to HP's BIOS thermal policies via WMI.
+- **Native WMI Fan & Performance Control:** Switch between Silent, Balanced, and Turbo modes, directly mapped to HP's BIOS thermal policies via official WMI commands.
+- **Custom Fan Curves:** Configure per-mode temperature-to-fan-speed curves for both CPU and GPU with real-time WMI RPM feedback.
 - **Graphics (GPU) Management:** Toggle between Eco (iGPU only), Standard (Hybrid), Ultimate (discrete), and Optimized auto-switching modes.
-- **Custom Fan Curves:** Configure per-mode temperature-to-fan-speed curves for both CPU and GPU with real-time RPM feedback.
-- **Advanced Power Tuning:** Fine-tune CPU power limits (Intel PL1/PL2 or AMD SPL/sPPT/fPPT) with smart detection — if limits are BIOS-locked, the sliders automatically gray out so you always know the true state.
-- **Live Power Telemetry:** Real-time CPU package power draw displayed via LibreHardwareMonitor with RAPL MSR fallback.
-- **Display & Battery Tweaks:** Automatic screen refresh rate switching by power state and configurable battery charge thresholds.
-- **Keyboard Backlight Control:** Per-zone RGB adjustments and hotkey bindings.
-- **No Unsigned Drivers:** Utilizes PawnIO, a safe signed kernel interface, for all low-level register access — fully compatible with modern Windows Secure Boot policies.
+- **Advanced Power Tuning:** Fine-tune CPU power limits (Intel PL1/PL2 or AMD SPL/sPPT/fPPT) with smart detection.
+- **Live Power Telemetry:** Real-time CPU package power draw displayed via LibreHardwareMonitor.
+- **Keyboard Backlight Control:** WMI-driven per-zone RGB adjustments and hotkey bindings.
+- **Windows Dynamic Lighting:** Native support for modern OMEN laptops with per-key RGB keyboards via Windows Settings.
+- **Fallback Support:** Maintains the PawnIO signed kernel interface *only* as a fallback for older models or deep MSR reading.
 
 ---
 
@@ -96,6 +101,7 @@ Reverse-engineering undocumented hardware interfaces, debugging kernel drivers, 
 | Project | Role |
 |---------|------|
 | [seerge/g-helper](https://github.com/seerge/g-helper) | Foundational project — UI, layout, and core logic |
+| [OmenCore](https://github.com/theantipopau/omencore) | Foundation for hardware control and feature detection logic |
 | [PawnIO](https://github.com/namazso/PawnIO) | Signed kernel driver for safe MSR/MMIO/SMU access |
 | [LibreHardwareMonitor](https://github.com/LibreHardwareMonitor/LibreHardwareMonitor) | Robust hardware sensor and power telemetry reading |
 | [UXTU](https://github.com/JamesCJ60/Universal-x86-Tuning-Utility) | Ryzen SMU undervolting and power limit endpoints |

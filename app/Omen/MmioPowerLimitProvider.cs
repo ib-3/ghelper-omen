@@ -68,17 +68,37 @@ namespace OmenCore.Hardware
         private const ulong MCHBAR_BASE_MASK  = 0xFFFFFFFE_0000UL;   // bits 31:15
 
         // PKG_RAPL_POWER_LIMIT bitfield layout (MSR 0x610 / MMIO MCHBAR+0x59A0)
-        private const uint  PL1_POWER_MASK     = 0x00007FFFu;
-        private const uint  PL1_ENABLE_BIT     = 1u << 15;
-        private const uint  PL1_CLAMP_BIT      = 1u << 16;
-        private const uint  PL1_TW_MASK         = 0x00F80000u;   // bits 23:17
+        //
+        // Low dword  (PL1):
+        //   bits 14:0  = PL1 power (in power_unit steps)
+        //   bit  15    = PL1_ENABLE
+        //   bit  16    = PL1_CLAMP
+        //   bits 23:17 = PL1 time window
+        //   bits 31:24 = reserved/TW high — must be preserved (ThrottleStop top-8-bit mask)
+        //
+        // High dword (PL2):
+        //   bits 14:0  = PL2 power
+        //   bit  15    = PL2_ENABLE
+        //   bit  16    = PL2_CLAMP
+        //   bits 23:17 = PL2 time window
+        //   bits 30:24 = reserved/TW high — must be preserved
+        //   bit  31    = LOCK (must NEVER be cleared)
+        //
+        // ThrottleStop XOR RMW masks:
+        //   PL1 low  24 bits owned by us → top  8 bits (31:24) preserved
+        //   PL2 low  17 bits owned by us → top 15 bits (31:17) preserved (incl. LOCK)
+        private const uint  PL1_OWNED_MASK    = 0x00FFFFFFu;   // bits 23:0 — power+enable+clamp+TW7
+        private const uint  PL1_PRESERVE_MASK = 0xFF000000u;   // bits 31:24 — top 8 bits preserved
 
-        private const uint  PL2_POWER_MASK     = 0x00007FFFu;   // (in high dword)
-        private const uint  PL2_ENABLE_BIT     = 1u << 15;      // bit 47 overall
-        private const uint  PL2_CLAMP_BIT      = 1u << 16;      // bit 48 overall
-        private const uint  PL2_TW_MASK         = 0x00F80000u;   // bits 55:49 overall
+        private const uint  PL2_OWNED_MASK    = 0x0001FFFFu;   // bits 16:0 — power+enable+clamp
+        private const uint  PL2_PRESERVE_MASK = 0xFFFE0000u;   // bits 31:17 — TW + lock preserved
 
-        private const ulong LOCK_BIT            = 1UL << 63;    // bit 63 (in high dword bit 31)
+        private const uint  PL1_ENABLE_BIT    = 1u << 15;
+        private const uint  PL2_ENABLE_BIT    = 1u << 15;
+        private const uint  PL1_POWER_MASK    = 0x00007FFFu;
+        private const uint  PL2_POWER_MASK    = 0x00007FFFu;
+
+        private const ulong LOCK_BIT          = 1UL << 63;    // bit 63 (in high dword bit 31)
 
         public bool IsAvailable => _mmio != null && _mmio.IsAvailable && _mchbarValid && _unitsValid;
 
@@ -264,15 +284,13 @@ namespace OmenCore.Hardware
                 uint low  = _mmio.ReadMmioDword(Reg(RAPL_PKG_POWER_LIMIT_OFFSET));
                 uint high = _mmio.ReadMmioDword(Reg(RAPL_PKG_POWER_LIMIT_OFFSET) + 4);
 
-                ulong value = low | ((ulong)high << 32);
+                double pl1Watts   = (low & 0x7FFF) * _powerUnit;
+                bool   pl1Enabled = (low & (1u << 15)) != 0;
 
-                double pl1Watts   = (value & 0x7FFF) * _powerUnit;
-                bool   pl1Enabled = (value & (1UL << 15)) != 0;
+                double pl2Watts   = (high & 0x7FFF) * _powerUnit;
+                bool   pl2Enabled = (high & (1u << 15)) != 0;
 
-                double pl2Watts   = ((value >> 32) & 0x7FFF) * _powerUnit;
-                bool   pl2Enabled = (value & (1UL << 47)) != 0;
-
-                bool isLocked = (value & LOCK_BIT) != 0;
+                bool isLocked = (high & (1u << 31)) != 0;
 
                 return (pl1Watts, pl2Watts, pl1Enabled, pl2Enabled, isLocked);
             }
@@ -288,18 +306,18 @@ namespace OmenCore.Hardware
             if (!IsAvailable) return 150;
             try
             {
-                uint infoLow = _mmio.ReadMmioDword(Reg(RAPL_PKG_POWER_INFO_OFFSET));
+                uint infoLow  = _mmio.ReadMmioDword(Reg(RAPL_PKG_POWER_INFO_OFFSET));
                 uint infoHigh = _mmio.ReadMmioDword(Reg(RAPL_PKG_POWER_INFO_OFFSET) + 4);
                 ulong info = ((ulong)infoHigh << 32) | infoLow;
-                
+
                 uint maxPower = (uint)((info >> 32) & 0x7FFF); // bits 46:32
                 if (maxPower > 0)
                     return (int)Math.Ceiling(maxPower * _powerUnit);
-                    
+
                 uint tdp = (uint)(info & 0x7FFF);
                 if (tdp > 0)
                     return (int)Math.Ceiling(tdp * _powerUnit) * 2;
-                    
+
                 return 150;
             }
             catch
@@ -309,9 +327,26 @@ namespace OmenCore.Hardware
         }
 
         // ─────────────────────────────────────────────────────────────────────────────
-        // SetPowerLimits — audit §2, §7, §13, §14, §21 fix
-        // Returns true ONLY if read-back verification confirms both PL1 and PL2 bits
-        // were actually written.
+        // SetPowerLimits — ThrottleStop XOR RMW pattern (mirror of FUN_00439f15)
+        //
+        // Instead of reconstructing both dwords from scratch, we apply a precise
+        // XOR read-modify-write that touches ONLY the bits we own and leaves
+        // everything else (TW fields, reserved bits, LOCK) exactly as the hardware
+        // left them.
+        //
+        //   PL1 (low dword):  owned = bits 23:0  (power+enable+clamp+TW7)
+        //     newLow  = (currentLow  & PL1_PRESERVE_MASK) | (desired & PL1_OWNED_MASK)
+        //             ≡ currentLow ^ ((desired ^ currentLow) & PL1_OWNED_MASK)   [XOR form]
+        //
+        //   PL2 (high dword): owned = bits 16:0  (power+enable+clamp only)
+        //     newHigh = (currentHigh & PL2_PRESERVE_MASK) | (desired & PL2_OWNED_MASK)
+        //             ≡ currentHigh ^ ((desired ^ currentHigh) & PL2_OWNED_MASK) [XOR form]
+        //
+        // The XOR form is identical to what ThrottleStop's Delphi code does:
+        //   new_edx = mmio_edx ^ (user_pl2 ^ mmio_edx) & 0x1FFFF
+        //
+        // Returns true ONLY if read-back verification confirms PL1/PL2 bits were
+        // actually written.
         // ─────────────────────────────────────────────────────────────────────────────
         public bool SetPowerLimits(double pl1Watts, double pl2Watts,
                                     bool pl1Clamp = true, bool pl2Clamp = true)
@@ -325,63 +360,80 @@ namespace OmenCore.Hardware
 
             try
             {
-                ulong addr       = Reg(RAPL_PKG_POWER_LIMIT_OFFSET);
+                ulong addr        = Reg(RAPL_PKG_POWER_LIMIT_OFFSET);
                 uint  currentLow  = _mmio.ReadMmioDword(addr);
                 uint  currentHigh = _mmio.ReadMmioDword(addr + 4);
 
-                // ── PL1 (low dword) ──────────────────────────────────────────────
-                // Preserve TW1 (bits 23:17) and any reserved bits. Clear PL1 power,
-                // enable, and clamp. Then OR in the new values.
-                uint newLow = currentLow;
-                newLow &= ~(PL1_POWER_MASK | PL1_ENABLE_BIT | PL1_CLAMP_BIT);
+                // Guard: bail if hardware returned all-ones (failed read / locked out)
+                if (currentLow == 0xFFFFFFFFu || currentHigh == 0xFFFFFFFFu)
+                {
+                    Log($"SetPowerLimits aborted — MMIO read returned 0xFFFFFFFF " +
+                        $"(low=0x{currentLow:X8}, high=0x{currentHigh:X8}). " +
+                        "Register not mapped or MCHBAR offset wrong for this platform.");
+                    return false;
+                }
 
+                // ── Build desired PL1 low 24 bits ──────────────────────────────────
+                // bits 14:0 = power, bit 15 = enable, bit 16 = clamp
+                // bits 23:17 = time window — we preserve the hardware's existing TW
+                // by copying those bits from currentLow into desiredLow so that the
+                // XOR RMW leaves them untouched.
+                uint desiredLow = 0u;
                 if (pl1Watts > 0)
                 {
                     uint pl1Raw = (uint)Math.Round(pl1Watts / _powerUnit) & PL1_POWER_MASK;
-                    newLow |= pl1Raw;
-                    newLow |= PL1_ENABLE_BIT;
-                    if (pl1Clamp) newLow |= PL1_CLAMP_BIT;
+                    desiredLow  = pl1Raw | PL1_ENABLE_BIT;
+                    if (pl1Clamp) desiredLow |= (1u << 16);            // clamp bit
+                    desiredLow |= currentLow & 0x00FE0000u;            // preserve TW (bits 23:17)
                 }
-                // pl1Watts == 0 → PL1 disabled (no enable bit, no power bits)
+                // pl1Watts == 0 → desiredLow stays 0 → PL1 disabled
 
-                _mmio.WriteMmioDword(addr, newLow);
+                // ThrottleStop XOR RMW — PL1:
+                //   newLow = (currentLow & PL1_PRESERVE_MASK) | (desiredLow & PL1_OWNED_MASK)
+                uint newLow = currentLow ^ ((desiredLow ^ currentLow) & PL1_OWNED_MASK);
 
-                // ── PL2 (high dword) ─────────────────────────────────────────────
-                // Same pattern. Note: LOCK_BIT lives in bit 31 of high dword — preserve it.
-                uint newHigh = currentHigh;
-                newHigh &= ~(PL2_POWER_MASK | PL2_ENABLE_BIT | PL2_CLAMP_BIT);
-                // NEVER clear or set LOCK_BIT here — preserve whatever was there.
-                newHigh |= (currentHigh & 0x80000000u);
-
+                // ── Build desired PL2 low 17 bits ──────────────────────────────────
+                // bits 14:0 = power, bit 15 = enable, bit 16 = clamp
+                // bits 31:17 (TW fields + LOCK) are fully preserved via PL2_PRESERVE_MASK.
+                uint desiredHigh = 0u;
                 if (pl2Watts > 0)
                 {
                     uint pl2Raw = (uint)Math.Round(pl2Watts / _powerUnit) & PL2_POWER_MASK;
-                    newHigh |= pl2Raw;
-                    newHigh |= PL2_ENABLE_BIT;
-                    if (pl2Clamp) newHigh |= PL2_CLAMP_BIT;
+                    desiredHigh = pl2Raw | PL2_ENABLE_BIT;
+                    if (pl2Clamp) desiredHigh |= (1u << 16);           // clamp bit
                 }
 
+                // ThrottleStop XOR RMW — PL2:
+                //   newHigh = currentHigh ^ ((desiredHigh ^ currentHigh) & PL2_OWNED_MASK)
+                // Identical to ThrottleStop's Delphi:
+                //   new_edx = mmio_edx ^ (user_pl2 ^ mmio_edx) & 0x1FFFF
+                uint newHigh = currentHigh ^ ((desiredHigh ^ currentHigh) & PL2_OWNED_MASK);
+
+                _mmio.WriteMmioDword(addr,     newLow);
                 _mmio.WriteMmioDword(addr + 4, newHigh);
 
-                // ── READ-BACK VERIFICATION (audit §2 fix) ───────────────────────
+                Log($"MMIO PL1 +0x{RAPL_PKG_POWER_LIMIT_OFFSET:X}: 0x{currentLow:X8} → 0x{newLow:X8}");
+                Log($"MMIO PL2 +0x{RAPL_PKG_POWER_LIMIT_OFFSET + 4:X}: 0x{currentHigh:X8} → 0x{newHigh:X8}");
+
+                // ── READ-BACK VERIFICATION ─────────────────────────────────────────
                 uint verifyLow  = _mmio.ReadMmioDword(addr);
                 uint verifyHigh = _mmio.ReadMmioDword(addr + 4);
 
-                bool pl1Ok = (verifyLow & (PL1_POWER_MASK | PL1_ENABLE_BIT)) ==
-                             (newLow    & (PL1_POWER_MASK | PL1_ENABLE_BIT));
+                bool pl1Ok = (verifyLow  & (PL1_POWER_MASK | PL1_ENABLE_BIT)) ==
+                             (newLow     & (PL1_POWER_MASK | PL1_ENABLE_BIT));
                 bool pl2Ok = (verifyHigh & (PL2_POWER_MASK | PL2_ENABLE_BIT)) ==
                              (newHigh    & (PL2_POWER_MASK | PL2_ENABLE_BIT));
 
                 if (!pl1Ok || !pl2Ok)
                 {
-                    Log($"SetPowerLimits verification FAILED: "
-                        + $"pl1Ok={pl1Ok} (wrote 0x{newLow:X8}, read 0x{verifyLow:X8}), "
-                        + $"pl2Ok={pl2Ok} (wrote 0x{newHigh:X8}, read 0x{verifyHigh:X8})");
+                    Log($"SetPowerLimits verification FAILED: " +
+                        $"pl1Ok={pl1Ok} (wrote 0x{newLow:X8}, read 0x{verifyLow:X8}), " +
+                        $"pl2Ok={pl2Ok} (wrote 0x{newHigh:X8}, read 0x{verifyHigh:X8})");
                     return false;
                 }
 
-                Log($"SetPowerLimits verified OK: PL1={pl1Watts}W (clamp={pl1Clamp}), "
-                    + $"PL2={pl2Watts}W (clamp={pl2Clamp})");
+                Log($"SetPowerLimits verified OK: PL1={pl1Watts}W (clamp={pl1Clamp}), " +
+                    $"PL2={pl2Watts}W (clamp={pl2Clamp})");
                 return true;
             }
             catch (Exception ex)
@@ -391,10 +443,17 @@ namespace OmenCore.Hardware
             }
         }
 
+
         // ─────────────────────────────────────────────────────────────────────────────
-        // SyncFromMsr — audit §10 fix (mask out LOCK bit before copying)
-        // Copies PL1/PL2 power + enable + clamp + TW from MSR 0x610 to MMIO 0x59A0,
-        // preserving MMIO's LOCK bit (do NOT propagate lock from MSR to MMIO).
+        // SyncFromMsr — ThrottleStop XOR RMW pattern
+        //
+        // Copies PL1/PL2 power + enable + clamp from MSR 0x610 to MMIO 0x59A0/0x59A4,
+        // using the same XOR RMW idiom as SetPowerLimits so that:
+        //   - PL1 TW bits (bits 23:17) already in MMIO are preserved (top-8-bit mask)
+        //   - PL2 TW + LOCK bits (bits 31:17) already in MMIO are preserved
+        //   - The MSR LOCK bit (bit 63) is NEVER copied into MMIO
+        //
+        // This matches ThrottleStop's "Sync MMIO" behaviour exactly.
         // ─────────────────────────────────────────────────────────────────────────────
         public void SyncFromMsr(ulong msr610Value)
         {
@@ -402,7 +461,7 @@ namespace OmenCore.Hardware
 
             try
             {
-                // Mask out LOCK_BIT (bit 63) — never copy the lock from MSR to MMIO.
+                // Strip the MSR LOCK bit — never propagate it to MMIO.
                 ulong sanitized = msr610Value & ~LOCK_BIT;
 
                 uint msrLow  = (uint)(sanitized & 0xFFFFFFFF);
@@ -410,15 +469,31 @@ namespace OmenCore.Hardware
 
                 ulong address = Reg(RAPL_PKG_POWER_LIMIT_OFFSET);
 
-                // Preserve MMIO's LOCK bit (don't accidentally clear it either)
+                uint currentLow  = _mmio.ReadMmioDword(address);
                 uint currentHigh = _mmio.ReadMmioDword(address + 4);
-                uint preserveLockHigh = (msrHigh & 0x7FFFFFFFu) | (currentHigh & 0x80000000u);
 
-                _mmio.WriteMmioDword(address,     msrLow);
-                _mmio.WriteMmioDword(address + 4, preserveLockHigh);
+                // Guard: bail on all-ones (failed read)
+                if (currentLow == 0xFFFFFFFFu || currentHigh == 0xFFFFFFFFu)
+                {
+                    Log($"SyncFromMsr aborted — MMIO read returned 0xFFFFFFFF. "
+                        + "Register not mapped or MCHBAR offset wrong for this platform.");
+                    return;
+                }
 
-                Log($"SyncFromMsr complete. MSR=0x{msr610Value:X16} → MMIO=0x{sanitized:X16} "
-                    + "(LOCK bit stripped)");
+                // ThrottleStop XOR RMW — PL1 (low dword)
+                // Owned = bits 23:0.  Top 8 bits (31:24) preserved.
+                uint newLow  = currentLow  ^ ((msrLow  ^ currentLow)  & PL1_OWNED_MASK);
+
+                // ThrottleStop XOR RMW — PL2 (high dword)
+                // Owned = bits 16:0.  Bits 31:17 (TW + LOCK) preserved.
+                uint newHigh = currentHigh ^ ((msrHigh ^ currentHigh) & PL2_OWNED_MASK);
+
+                _mmio.WriteMmioDword(address,     newLow);
+                _mmio.WriteMmioDword(address + 4, newHigh);
+
+                Log($"SyncFromMsr: MSR=0x{msr610Value:X16} "
+                    + $"→ MMIO PL1: 0x{currentLow:X8}→0x{newLow:X8}, "
+                    + $"PL2: 0x{currentHigh:X8}→0x{newHigh:X8} (LOCK bit stripped)");
             }
             catch (Exception ex)
             {

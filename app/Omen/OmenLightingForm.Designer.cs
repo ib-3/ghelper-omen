@@ -21,7 +21,8 @@ namespace GHelper
             // ── Keyboard tab controls ────────────────────────────────────
             this.labelKbdStatus  = new Label();
             this.checkKbdBacklight = new CheckBox();
-            this.groupKbdZones   = new GroupBox();
+            this.groupKbdZones   = new Panel();
+            this.labelKbdZonesTitle = new Label();
             this.panelZones      = new Panel();
             this.panelZone0      = new Panel();
             this.panelZone1      = new Panel();
@@ -31,41 +32,44 @@ namespace GHelper
             this.labelZone1      = new Label();
             this.labelZone2      = new Label();
             this.labelZone3      = new Label();
-            this.btnKbdApplyZones = new Button();
+            this.btnKbdApplyZones = new GHelper.UI.RButton();
 
-            this.groupKbdEffect   = new GroupBox();
+            this.groupKbdEffect   = new Panel();
+            this.labelKbdEffectTitle = new Label();
             this.labelEffectType  = new Label();
-            this.comboKbdEffect   = new ComboBox();
+            this.comboKbdEffect   = new GHelper.UI.RComboBox();
             this.labelKbdBr       = new Label();
-            this.trackKbdBrightness = new TrackBar();
+            this.trackKbdBrightness = new GHelper.UI.Slider();
             this.labelKbdSp       = new Label();
-            this.trackKbdSpeed    = new TrackBar();
+            this.trackKbdSpeed    = new GHelper.UI.Slider();
             this.panelEffColors   = new Panel();
             this.panelEffColor1   = new Panel();
             this.panelEffColor2   = new Panel();
             this.panelEffColor3   = new Panel();
             this.panelEffColor4   = new Panel();
             this.labelEffColors   = new Label();
-            this.btnKbdApplyEffect = new Button();
+            this.btnKbdApplyEffect = new GHelper.UI.RButton();
 
-            // ── LightBar tab controls ────────────────────────────────────
+            // ── Lightbar tab controls ────────────────────────────────────
             this.labelLbStatus    = new Label();
-            this.groupLbZones     = new GroupBox();
+            this.groupLbZones     = new Panel();
+            this.labelLbZonesTitle = new Label();
             this.panelLbZones     = new Panel();
-            this.groupLbEffect    = new GroupBox();
+            this.groupLbEffect    = new Panel();
+            this.labelLbEffectTitle = new Label();
             this.labelLbEffType   = new Label();
-            this.comboLbEffect    = new ComboBox();
+            this.comboLbEffect    = new GHelper.UI.RComboBox();
             this.labelLbBr        = new Label();
-            this.trackLbBrightness = new TrackBar();
+            this.trackLbBrightness = new GHelper.UI.Slider();
             this.labelLbSp        = new Label();
-            this.trackLbSpeed     = new TrackBar();
+            this.trackLbSpeed     = new GHelper.UI.Slider();
             this.panelLbEffColors = new Panel();
             this.panelLbEffColor1 = new Panel();
             this.panelLbEffColor2 = new Panel();
             this.panelLbEffColor3 = new Panel();
             this.panelLbEffColor4 = new Panel();
             this.labelLbEffColors = new Label();
-            this.btnLbApply       = new Button();
+            this.btnLbApply       = new GHelper.UI.RButton();
 
             this.SuspendLayout();
 
@@ -105,16 +109,24 @@ namespace GHelper
             this.checkKbdBacklight.Checked  = true;
             this.checkKbdBacklight.Location = new Point(8, 26);
             this.checkKbdBacklight.AutoSize = true;
+            this.checkKbdBacklight.UseVisualStyleBackColor = true;
 
             // ── Zone colour group ─────────────────────────────────────────
-            this.groupKbdZones.Text     = "Zone Colors  (click a zone to change)";
-            this.groupKbdZones.Location = new Point(8, 52);
-            this.groupKbdZones.Size     = new Size(492, 90);
+            this.labelKbdZonesTitle.Text = "Zone Colors (click a zone to change)";
+            this.labelKbdZonesTitle.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            this.labelKbdZonesTitle.AutoSize = true;
+            this.labelKbdZonesTitle.Location = new Point(8, 56);
+            
+            this.panelZones.Location = new Point(0, 76);
+            this.panelZones.Size     = new Size(504, 100);
 
-            // Zone panels (4 × side by side)
-            int zW = 110, zH = 50, zTop = 24, zGap = 4;
-            ConfigureZonePanel(this.panelZone0, this.labelZone0, "Right",  zTop, 8,         zW, zH, Color.FromArgb(0,120,255));
-            ConfigureZonePanel(this.panelZone1, this.labelZone1, "Mid-R",  zTop, 8+zW+zGap, zW, zH, Color.FromArgb(0,200,120));
+            this.groupKbdZones.Location = new Point(8, 0);
+            this.groupKbdZones.Size     = new Size(492, 90);
+            this.panelZones.Controls.Add(this.groupKbdZones);
+
+            int zW = 96, zH = 50, zTop = 24, zGap = 4;
+            ConfigureZonePanel(this.panelZone0, this.labelZone0, "Right",  zTop, 8,             zW, zH, Color.FromArgb(0,120,255));
+            ConfigureZonePanel(this.panelZone1, this.labelZone1, "Mid-R",  zTop, 8+zW+zGap,     zW, zH, Color.FromArgb(0,200,120));
             ConfigureZonePanel(this.panelZone2, this.labelZone2, "Mid-L",  zTop, 8+2*(zW+zGap), zW, zH, Color.FromArgb(255,120,0));
             ConfigureZonePanel(this.panelZone3, this.labelZone3, "WASD",   zTop, 8+3*(zW+zGap), zW, zH, Color.FromArgb(200,0,255));
             this.groupKbdZones.Controls.Add(this.panelZone0);
@@ -123,64 +135,52 @@ namespace GHelper
             this.groupKbdZones.Controls.Add(this.panelZone3);
 
             this.btnKbdApplyZones.Text     = "Apply Zones";
-            this.btnKbdApplyZones.Location = new Point(8+4*(zW+zGap), zTop+2);
-            // Push into panel
-            this.btnKbdApplyZones.Location = new Point(374, 26);
-            this.btnKbdApplyZones.Size     = new Size(112, 46);
+            this.btnKbdApplyZones.Location = new Point(8 + 4*(zW+zGap) + zGap, zTop);
+            this.btnKbdApplyZones.Size     = new Size(80, zH);
             this.btnKbdApplyZones.Font     = new Font("Segoe UI", 9F, FontStyle.Bold);
             this.groupKbdZones.Controls.Add(this.btnKbdApplyZones);
 
-            // panelZones wraps the group
-            this.panelZones.Controls.Add(this.groupKbdZones);
-            this.panelZones.Location = new Point(0, 48);
-            this.panelZones.Size     = new Size(504, 100);
-
             // ── Effect group ─────────────────────────────────────────────
-            this.groupKbdEffect.Text     = "Lighting Effect";
-            this.groupKbdEffect.Location = new Point(8, 155);
-            this.groupKbdEffect.Size     = new Size(492, 190);
+            this.labelKbdEffectTitle.Text = "Lighting Effect";
+            this.labelKbdEffectTitle.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            this.labelKbdEffectTitle.AutoSize = true;
+            this.labelKbdEffectTitle.Location = new Point(8, 193);
+
+            this.groupKbdEffect.Location = new Point(8, 213);
+            this.groupKbdEffect.Size     = new Size(492, 210);
 
             // Effect type row
             this.labelEffectType.Text     = "Effect:";
-            this.labelEffectType.Location = new Point(8, 24);
-            this.labelEffectType.Size     = new Size(50, 22);
-            this.comboKbdEffect.Location  = new Point(62, 22);
+            this.labelEffectType.AutoSize = true;
+            this.labelEffectType.Location = new Point(8, 10);
+            this.comboKbdEffect.Location  = new Point(85, 6);
             this.comboKbdEffect.Size      = new Size(200, 24);
-            this.comboKbdEffect.DropDownStyle = ComboBoxStyle.DropDownList;
             this.groupKbdEffect.Controls.Add(this.labelEffectType);
             this.groupKbdEffect.Controls.Add(this.comboKbdEffect);
 
             // Brightness
             this.labelKbdBr.Text          = "Brightness:";
-            this.labelKbdBr.Location      = new Point(8, 52);
-            this.labelKbdBr.Size          = new Size(70, 18);
-            this.trackKbdBrightness.Location = new Point(80, 48);
-            this.trackKbdBrightness.Size  = new Size(180, 24);
-            this.trackKbdBrightness.Minimum = 0;
-            this.trackKbdBrightness.Maximum = 100;
-            this.trackKbdBrightness.Value   = 100;
-            this.trackKbdBrightness.TickFrequency = 10;
+            this.labelKbdBr.AutoSize      = true;
+            this.labelKbdBr.Location      = new Point(8, 50);
+            this.trackKbdBrightness.Location = new Point(85, 46);
+            this.trackKbdBrightness.Size  = new Size(200, 25);
             this.groupKbdEffect.Controls.Add(this.labelKbdBr);
             this.groupKbdEffect.Controls.Add(this.trackKbdBrightness);
 
             // Speed
             this.labelKbdSp.Text          = "Speed:";
-            this.labelKbdSp.Location      = new Point(8, 80);
-            this.labelKbdSp.Size          = new Size(70, 18);
-            this.trackKbdSpeed.Location   = new Point(80, 76);
-            this.trackKbdSpeed.Size       = new Size(180, 24);
-            this.trackKbdSpeed.Minimum    = 0;
-            this.trackKbdSpeed.Maximum    = 10;
-            this.trackKbdSpeed.Value      = 5;
-            this.trackKbdSpeed.TickFrequency = 1;
+            this.labelKbdSp.AutoSize      = true;
+            this.labelKbdSp.Location      = new Point(8, 95);
+            this.trackKbdSpeed.Location   = new Point(85, 91);
+            this.trackKbdSpeed.Size       = new Size(200, 25);
             this.groupKbdEffect.Controls.Add(this.labelKbdSp);
             this.groupKbdEffect.Controls.Add(this.trackKbdSpeed);
 
             // Effect colours
             this.labelEffColors.Text      = "Colors:";
-            this.labelEffColors.Location  = new Point(8, 108);
-            this.labelEffColors.Size      = new Size(50, 18);
-            this.panelEffColors.Location  = new Point(62, 104);
+            this.labelEffColors.AutoSize  = true;
+            this.labelEffColors.Location  = new Point(8, 140);
+            this.panelEffColors.Location  = new Point(85, 136);
             this.panelEffColors.Size      = new Size(230, 30);
             AddColorSwatch(this.panelEffColors, this.panelEffColor1, 0,   Color.FromArgb(255,0,80));
             AddColorSwatch(this.panelEffColors, this.panelEffColor2, 58,  Color.FromArgb(255,120,0));
@@ -191,7 +191,7 @@ namespace GHelper
 
             // Apply button
             this.btnKbdApplyEffect.Text     = "Apply Effect";
-            this.btnKbdApplyEffect.Location = new Point(370, 22);
+            this.btnKbdApplyEffect.Location = new Point(350, 6);
             this.btnKbdApplyEffect.Size     = new Size(112, 36);
             this.btnKbdApplyEffect.Font     = new Font("Segoe UI", 9F, FontStyle.Bold);
             this.groupKbdEffect.Controls.Add(this.btnKbdApplyEffect);
@@ -199,7 +199,9 @@ namespace GHelper
             // Assemble keyboard tab
             this.tabKeyboard.Controls.Add(this.labelKbdStatus);
             this.tabKeyboard.Controls.Add(this.checkKbdBacklight);
+            this.tabKeyboard.Controls.Add(this.labelKbdZonesTitle);
             this.tabKeyboard.Controls.Add(this.panelZones);
+            this.tabKeyboard.Controls.Add(this.labelKbdEffectTitle);
             this.tabKeyboard.Controls.Add(this.groupKbdEffect);
 
             // ════════════════════════════════════════════════════════════
@@ -214,55 +216,54 @@ namespace GHelper
             this.labelLbStatus.Font   = new Font("Segoe UI", 9F, FontStyle.Bold);
 
             // Zone picker panel (built dynamically in code)
-            this.groupLbZones.Text     = "Light Bar Zones  (click to change color)";
-            this.groupLbZones.Location = new Point(8, 26);
+            this.labelLbZonesTitle.Text = "Light Bar Zones  (click to change color)";
+            this.labelLbZonesTitle.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            this.labelLbZonesTitle.AutoSize = true;
+            this.labelLbZonesTitle.Location = new Point(8, 26);
+
+            this.groupLbZones.Location = new Point(8, 46);
             this.groupLbZones.Size     = new Size(492, 72);
-            this.panelLbZones.Location = new Point(8, 20);
+            this.panelLbZones.Location = new Point(0, 0);
             this.panelLbZones.Size     = new Size(476, 44);
             this.groupLbZones.Controls.Add(this.panelLbZones);
 
             // Effect group
-            this.groupLbEffect.Text     = "Lightbar Effect";
-            this.groupLbEffect.Location = new Point(8, 106);
-            this.groupLbEffect.Size     = new Size(492, 190);
+            this.labelLbEffectTitle.Text = "Lightbar Effect";
+            this.labelLbEffectTitle.Font = new Font("Segoe UI", 9F, FontStyle.Bold);
+            this.labelLbEffectTitle.AutoSize = true;
+            this.labelLbEffectTitle.Location = new Point(8, 126);
+
+            this.groupLbEffect.Location = new Point(8, 146);
+            this.groupLbEffect.Size     = new Size(492, 210);
 
             this.labelLbEffType.Text     = "Effect:";
-            this.labelLbEffType.Location = new Point(8, 24);
-            this.labelLbEffType.Size     = new Size(50, 22);
-            this.comboLbEffect.Location  = new Point(62, 22);
+            this.labelLbEffType.AutoSize = true;
+            this.labelLbEffType.Location = new Point(8, 10);
+            this.comboLbEffect.Location  = new Point(85, 6);
             this.comboLbEffect.Size      = new Size(200, 24);
-            this.comboLbEffect.DropDownStyle = ComboBoxStyle.DropDownList;
             this.groupLbEffect.Controls.Add(this.labelLbEffType);
             this.groupLbEffect.Controls.Add(this.comboLbEffect);
 
             this.labelLbBr.Text          = "Brightness:";
-            this.labelLbBr.Location      = new Point(8, 52);
-            this.labelLbBr.Size          = new Size(70, 18);
-            this.trackLbBrightness.Location = new Point(80, 48);
-            this.trackLbBrightness.Size  = new Size(180, 24);
-            this.trackLbBrightness.Minimum = 0;
-            this.trackLbBrightness.Maximum = 100;
-            this.trackLbBrightness.Value   = 100;
-            this.trackLbBrightness.TickFrequency = 10;
+            this.labelLbBr.AutoSize      = true;
+            this.labelLbBr.Location      = new Point(8, 50);
+            this.trackLbBrightness.Location = new Point(85, 46);
+            this.trackLbBrightness.Size  = new Size(200, 25);
             this.groupLbEffect.Controls.Add(this.labelLbBr);
             this.groupLbEffect.Controls.Add(this.trackLbBrightness);
 
             this.labelLbSp.Text          = "Speed:";
-            this.labelLbSp.Location      = new Point(8, 80);
-            this.labelLbSp.Size          = new Size(70, 18);
-            this.trackLbSpeed.Location   = new Point(80, 76);
-            this.trackLbSpeed.Size       = new Size(180, 24);
-            this.trackLbSpeed.Minimum    = 0;
-            this.trackLbSpeed.Maximum    = 10;
-            this.trackLbSpeed.Value      = 5;
-            this.trackLbSpeed.TickFrequency = 1;
+            this.labelLbSp.AutoSize      = true;
+            this.labelLbSp.Location      = new Point(8, 95);
+            this.trackLbSpeed.Location   = new Point(85, 91);
+            this.trackLbSpeed.Size       = new Size(200, 25);
             this.groupLbEffect.Controls.Add(this.labelLbSp);
             this.groupLbEffect.Controls.Add(this.trackLbSpeed);
 
             this.labelLbEffColors.Text     = "Colors:";
-            this.labelLbEffColors.Location = new Point(8, 108);
-            this.labelLbEffColors.Size     = new Size(50, 18);
-            this.panelLbEffColors.Location = new Point(62, 104);
+            this.labelLbEffColors.AutoSize = true;
+            this.labelLbEffColors.Location = new Point(8, 140);
+            this.panelLbEffColors.Location = new Point(85, 136);
             this.panelLbEffColors.Size     = new Size(230, 30);
             AddColorSwatch(this.panelLbEffColors, this.panelLbEffColor1, 0,   Color.FromArgb(0,180,255));
             AddColorSwatch(this.panelLbEffColors, this.panelLbEffColor2, 58,  Color.FromArgb(0,255,120));
@@ -272,7 +273,7 @@ namespace GHelper
             this.groupLbEffect.Controls.Add(this.panelLbEffColors);
 
             this.btnLbApply.Text     = "Apply";
-            this.btnLbApply.Location = new Point(370, 22);
+            this.btnLbApply.Location = new Point(350, 26);
             this.btnLbApply.Size     = new Size(112, 36);
             this.btnLbApply.Font     = new Font("Segoe UI", 9F, FontStyle.Bold);
             this.groupLbEffect.Controls.Add(this.btnLbApply);
@@ -322,36 +323,40 @@ namespace GHelper
         private Label labelKbdStatus;
         private CheckBox checkKbdBacklight;
         private Panel panelZones;
-        private GroupBox groupKbdZones;
+        private Panel groupKbdZones;
+        private Label labelKbdZonesTitle;
         private Panel panelZone0, panelZone1, panelZone2, panelZone3;
         private Label labelZone0, labelZone1, labelZone2, labelZone3;
-        private Button btnKbdApplyZones;
+        private GHelper.UI.RButton btnKbdApplyZones;
 
-        private GroupBox groupKbdEffect;
+        private Panel groupKbdEffect;
+        private Label labelKbdEffectTitle;
         private Label labelEffectType;
-        private ComboBox comboKbdEffect;
+        private GHelper.UI.RComboBox comboKbdEffect;
         private Label labelKbdBr;
-        private TrackBar trackKbdBrightness;
+        private GHelper.UI.Slider trackKbdBrightness;
         private Label labelKbdSp;
-        private TrackBar trackKbdSpeed;
+        private GHelper.UI.Slider trackKbdSpeed;
         private Panel panelEffColors;
         private Panel panelEffColor1, panelEffColor2, panelEffColor3, panelEffColor4;
         private Label labelEffColors;
-        private Button btnKbdApplyEffect;
+        private GHelper.UI.RButton btnKbdApplyEffect;
 
         private Label labelLbStatus;
-        private GroupBox groupLbZones;
+        private Panel groupLbZones;
+        private Label labelLbZonesTitle;
         private Panel panelLbZones;
-        private GroupBox groupLbEffect;
+        private Panel groupLbEffect;
+        private Label labelLbEffectTitle;
         private Label labelLbEffType;
-        private ComboBox comboLbEffect;
+        private GHelper.UI.RComboBox comboLbEffect;
         private Label labelLbBr;
-        private TrackBar trackLbBrightness;
+        private GHelper.UI.Slider trackLbBrightness;
         private Label labelLbSp;
-        private TrackBar trackLbSpeed;
+        private GHelper.UI.Slider trackLbSpeed;
         private Panel panelLbEffColors;
         private Panel panelLbEffColor1, panelLbEffColor2, panelLbEffColor3, panelLbEffColor4;
         private Label labelLbEffColors;
-        private Button btnLbApply;
+        private GHelper.UI.RButton btnLbApply;
     }
 }

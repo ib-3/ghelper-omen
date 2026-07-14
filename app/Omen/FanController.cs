@@ -8,7 +8,9 @@ namespace OmenCore.Hardware
 {
     public class FanController
     {
-        private readonly IEcAccess _ecAccess;
+        // Nullable: EcAccessFactory.GetEcAccess() returns null when no backend
+        // (PawnIO/WinRing0) is installed. All access must be null-safe.
+        private readonly IEcAccess? _ecAccess;
         private readonly IReadOnlyDictionary<string, int> _registerMap;
         private readonly LibreHardwareMonitorImpl? _bridge;
         private readonly HpWmiBios? _wmiBios;
@@ -47,10 +49,12 @@ namespace OmenCore.Hardware
             _wmiBios = wmiBios;
             _logging = logging;
             _ecWriteDisableCooldownSeconds = ecWriteDisableCooldownSeconds;
-            _logging?.Debug($"FanController initialized (EC access ready: {_ecAccess.IsAvailable}, bridge: {(bridge != null ? "LHM" : "none (FanService provides temps)")}, wmiBios: {(wmiBios != null ? "available" : "none")}");
+            // Null-safe: _ecAccess may be null when no EC backend (PawnIO/WinRing0) is available.
+            bool ecReady = _ecAccess?.IsAvailable ?? false;
+            _logging?.Debug($"FanController initialized (EC access ready: {ecReady}, bridge: {(bridge != null ? "LHM" : "none (FanService provides temps)")}, wmiBios: {(wmiBios != null ? "available" : "none")}");
         }
 
-        public bool IsEcReady => _ecAccess.IsAvailable && !EcWritesTemporarilyDisabled;
+        public bool IsEcReady => (_ecAccess?.IsAvailable ?? false) && !EcWritesTemporarilyDisabled;
         
         /// <summary>
         /// True if EC writes are temporarily disabled by the watchdog (safety cooldown).
@@ -352,7 +356,7 @@ namespace OmenCore.Hardware
         /// </summary>
         protected virtual (int fan1Rpm, int fan2Rpm) ReadActualFanRpm()
         {
-            if (!_ecAccess.IsAvailable)
+            if (_ecAccess == null || !_ecAccess.IsAvailable)
                 return (0, 0);
 
             // SAFETY: Only use primary registers (0x34/0x35) which are known to work.
@@ -438,6 +442,13 @@ namespace OmenCore.Hardware
         {
             // Track last set percentage for RPM estimation fallback
             _lastSetFanPercent = Math.Clamp(percent, 0, 100);
+
+            // If EC access is unavailable (no PawnIO/WinRing0) or watchdog has disabled writes, skip.
+            if (_ecAccess == null || !_ecAccess.IsAvailable)
+            {
+                _logging?.Debug($"WriteDuty({percent}%) skipped — EC access unavailable");
+                return;
+            }
 
             // If the EC watchdog has temporarily disabled EC writes, skip immediately.
             if (EcWritesTemporarilyDisabled)
@@ -576,6 +587,12 @@ namespace OmenCore.Hardware
                 return;
             }
             
+            if (_ecAccess == null || !_ecAccess.IsAvailable)
+            {
+                _logging?.Debug("SetMaxSpeed skipped — EC access unavailable");
+                return;
+            }
+
             try
             {
                 _logging?.Debug($"EC SetMaxSpeed: enabling manual control and max values");
@@ -626,6 +643,12 @@ namespace OmenCore.Hardware
 
             // Track last set percentage (average for compatibility)
             _lastSetFanPercent = (cpuPercent + gpuPercent) / 2;
+
+            if (_ecAccess == null || !_ecAccess.IsAvailable)
+            {
+                _logging?.Debug($"SetFanSpeeds({cpuPercent}%, {gpuPercent}%) skipped — EC access unavailable");
+                return;
+            }
 
             try
             {
@@ -689,6 +712,12 @@ namespace OmenCore.Hardware
             const ushort REG_FAN_STATE = 0xF4;        // Fan state: 0x00=Enable, 0x02=Disable
             
             _lastSetFanPercent = -1;
+
+            if (_ecAccess == null || !_ecAccess.IsAvailable)
+            {
+                _logging?.Debug("RestoreAutoControl skipped — EC access unavailable");
+                return;
+            }
             
             try
             {

@@ -238,6 +238,9 @@ namespace GHelper
             if (Program.acpi.IsOmen())
             {
                 labelM3.Text = "M3 / Omen";
+
+                panelBacklight.Visible = false;
+                panelBacklightHeader.Visible = false;
             }
 
             // Change text and hide irrelevant options on the ROG Ally,

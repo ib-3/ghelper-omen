@@ -1,13 +1,14 @@
 using GHelper.UI;
 using OmenCore.Hardware;
 using System.Drawing;
+using System.Linq;
 using System.Windows.Forms;
 
 namespace GHelper
 {
     /// <summary>
     /// OMEN Lighting Control — compact form for keyboard zone colours,
-    /// animation effects, and lightbar control.
+    /// per-key RGB, animation effects, and lightbar control.
     /// </summary>
     public partial class OmenLightingForm : RForm
     {
@@ -28,7 +29,8 @@ namespace GHelper
             Color.FromArgb(0, 180, 255),
         };
 
-        // Colour gradient list for multi-colour effects
+        // Colour gradient list for multi-colour effects (shared by keyboard
+        // zone effects, lightbar effects, and per-key effects)
         private Color[] _effectColors = new Color[4]
         {
             Color.FromArgb(255, 0, 80),
@@ -37,12 +39,72 @@ namespace GHelper
             Color.FromArgb(100, 0, 255),
         };
 
-        public OmenLightingForm(OmenLightingService lighting)
+        private bool _hasPerKey;
+
+        public OmenLightingForm(OmenLightingService lighting, bool showLightbarOnly = false)
         {
             _lighting = lighting;
             InitializeComponent();
-            InitTheme();
             BindCapabilities();
+            InitTheme();
+
+            // Fix TabPage background rendering in Dark Mode
+            this.BackColor = RForm.formBack;
+            panelZones.BackColor = RForm.formBack;
+
+            tabControl.Visible = false;
+            if (showLightbarOnly)
+            {
+                this.Text = "Omen Lightbar";
+                foreach (Control c in tabLightBar.Controls.OfType<Control>().ToList())
+                {
+                    this.Controls.Add(c);
+                }
+            }
+            else
+            {
+                if (!lighting.Capabilities.HasLightBar)
+                {
+                    // No lightbar
+                }
+                foreach (Control c in tabKeyboard.Controls.OfType<Control>().ToList())
+                {
+                    this.Controls.Add(c);
+                }
+            }
+
+            // ── Capabilities ──────────────────────────────────────────────────
+            _hasPerKey = lighting.Capabilities.IsPerKey;
+
+            if (_hasPerKey)
+            {
+                labelKbdStatus.Text = "Keyboard: Per-key RGB";
+                labelZone0.Text = "All Keys";
+                panelZone1.Visible = false;
+                panelZone2.Visible = false;
+                panelZone3.Visible = false;
+            }
+            else
+            {
+                labelKbdStatus.Text = $"Keyboard: {lighting.Capabilities.KeyboardZoneCount}-zone RGB";
+            }
+
+            if (!lighting.Capabilities.HasLightBar)
+            {
+                labelLbStatus.Text = "No Lightbar detected.";
+                groupLbZones.Visible = false;
+                groupLbEffect.Visible = false;
+            }
+
+            // ── Effect combos ─────────────────────────────────────────────
+            var effectNames = new[] { "Static", "Breathing", "Color Cycle", "Wave", "Blinking" };
+            comboKbdEffect.Items.AddRange(effectNames);
+            comboKbdEffect.SelectedIndex = 0;
+            comboLbEffect.Items.AddRange(effectNames);
+            comboLbEffect.SelectedIndex = 0;
+
+            ResizeFormToFitContent();
+
             WireEvents();
         }
 
@@ -59,31 +121,26 @@ namespace GHelper
             {
                 labelKbdStatus.Text = $"Keyboard: {caps.KeyboardType}";
 
-                // Show zone pickers only for 4-zone; show effect panel always
-                panelZones.Visible = caps.IsFourZone;
-
-                // Per-key note
                 if (caps.IsPerKey)
                 {
-                    labelKbdStatus.Text += "  (Per-key — managed by Windows)";
-                    groupKbdZones.Visible = false;
-                    groupKbdEffect.Visible = false;
-                    
-                    var btnDynamicLighting = new Button
-                    {
-                        Text = "Open Windows Dynamic Lighting",
-                        AutoSize = true,
-                        Location = new Point(labelKbdStatus.Left, labelKbdStatus.Bottom + 20),
-                        Padding = new Padding(5)
-                    };
-                    btnDynamicLighting.Click += (s, e) => {
-                        try { System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ms-settings:personalization-dynamiclighting") { UseShellExecute = true }); } catch { }
-                    };
-                    tabKeyboard.Controls.Add(btnDynamicLighting);
+                    _hasPerKey = true;
+                    labelKbdStatus.Text += "  (Per-key RGB)";
+                    caps.KeyboardZoneCount = 1;
                 }
 
-                // Populate zone colour panels with initial colours
-                UpdateZonePanelColors();
+                int zones = Math.Max(1, caps.KeyboardZoneCount);
+                _zoneColors = new Color[zones];
+                for (int i = 0; i < zones; i++)
+                    _zoneColors[i] = Color.FromArgb(0, 180, 255);
+
+                BuildKeyboardZonePickers(zones);
+
+                panelZones.Visible = true;
+                if (!caps.IsFourZone && !caps.IsPerKey)
+                {
+                    // No effects maybe
+                    groupKbdEffect.Visible = false;
+                }
             }
             else
             {
@@ -97,7 +154,6 @@ namespace GHelper
                 int zones = Math.Max(1, caps.LightBarZoneCount);
                 labelLbStatus.Text = $"Light Bar: {zones} zone{(zones > 1 ? "s" : "")} detected";
 
-                // Resize bar colour array to match zone count
                 _lightBarColors = new Color[zones];
                 for (int i = 0; i < zones; i++)
                     _lightBarColors[i] = Color.FromArgb(0, 180, 255);
@@ -111,22 +167,42 @@ namespace GHelper
             }
 
             // ── Effect combos ─────────────────────────────────────────────
-            var effectNames = new[] { "Breathing" }; // Users requested keeping only Breathing
+            var effectNames = new[] { "Breathing", "Color Cycle", "Static" };
             comboKbdEffect.Items.AddRange(effectNames);
             comboKbdEffect.SelectedIndex = 0;
             comboLbEffect.Items.AddRange(effectNames);
             comboLbEffect.SelectedIndex = 0;
+
+            ResizeFormToFitContent();
+        }
+
+        // ──────────────────────────────────────────────────────────────────
+        // Dynamic form sizing
+        // ──────────────────────────────────────────────────────────────────
+
+        private void ResizeFormToFitContent()
+        {
+            int maxBottom = 0;
+            foreach (Control c in this.Controls)
+            {
+                if (c.Visible && c.Bottom > maxBottom && c != tabControl)
+                    maxBottom = c.Bottom;
+            }
+
+            if (maxBottom <= 0) return;
+
+            int neededHeight = maxBottom + 20; // 20px padding at the bottom
+            neededHeight = Math.Max(neededHeight, 180);
+            neededHeight = Math.Min(neededHeight, 720);
+
+            this.ClientSize = new Size(this.ClientSize.Width, neededHeight);
         }
 
         private void WireEvents()
         {
-            // Zone colour click
-            foreach (Panel p in panelZones.Controls.OfType<Panel>())
-                p.Click += ZonePanel_Click;
+            // Note: Keyboard zone panel clicks are wired dynamically in BuildKeyboardZonePickers.
 
-            // Lightbar zone click handled dynamically in BuildLightBarZonePickers
-
-            // Effect colour pickers
+            // Effect colour pickers (keyboard zone effects + lightbar effects)
             panelEffColor1.Click += EffectColor_Click;
             panelEffColor2.Click += EffectColor_Click;
             panelEffColor3.Click += EffectColor_Click;
@@ -151,31 +227,81 @@ namespace GHelper
         }
 
         // ──────────────────────────────────────────────────────────────────
-        // Zone colour management
+        // Zone colour management (4-zone keyboards)
         // ──────────────────────────────────────────────────────────────────
 
         private void UpdateZonePanelColors()
         {
-            var zonePanels = new[] { panelZone0, panelZone1, panelZone2, panelZone3 };
-            var zoneLabels = new[] { "Right", "Mid-R", "Mid-L", "WASD" };
-            for (int i = 0; i < zonePanels.Length; i++)
-            {
-                zonePanels[i].BackColor = _zoneColors[i];
-                zonePanels[i].Tag = i;
+            var zoneLabels = _hasPerKey 
+                ? new[] { "All Keys" }
+                : new[] { "Right", "Mid-R", "Mid-L", "WASD", "Left-Mac", "Extra" };
 
-                // Pick contrasting text colour
-                var lbl = zonePanels[i].Controls.OfType<Label>().FirstOrDefault();
-                if (lbl != null)
+            foreach (Control c in groupKbdZones.Controls)
+            {
+                if (c is Panel p && p.Tag is int i)
                 {
-                    lbl.Text = zoneLabels[i];
-                    lbl.ForeColor = IsColorDark(_zoneColors[i]) ? Color.White : Color.Black;
+                    p.BackColor = _zoneColors[i];
+
+                    var lbl = p.Controls.OfType<Label>().FirstOrDefault();
+                    if (lbl != null)
+                    {
+                        string defaultLabel = i < zoneLabels.Length ? zoneLabels[i] : $"Zone {i + 1}";
+                        lbl.Text = defaultLabel;
+                        lbl.ForeColor = IsColorDark(_zoneColors[i]) ? Color.White : Color.Black;
+                    }
                 }
             }
         }
 
+        private void BuildKeyboardZonePickers(int zones)
+        {
+            // Clear existing panels first
+            foreach (Control c in groupKbdZones.Controls.OfType<Panel>().ToList())
+                groupKbdZones.Controls.Remove(c);
+
+            int btnW = Math.Max(50, (groupKbdZones.Width - 110) / Math.Max(1, zones));
+            int zGap = 8;
+            int zTop = 25;
+            int zH = 50;
+
+            for (int z = 0; z < zones; z++)
+            {
+                var p = new Panel
+                {
+                    Width = btnW,
+                    Height = zH,
+                    Left = 8 + z * (btnW + zGap),
+                    Top = zTop,
+                    BackColor = _zoneColors[z],
+                    BorderStyle = BorderStyle.FixedSingle,
+                    Cursor = Cursors.Hand,
+                    Tag = z
+                };
+                var lbl = new Label
+                {
+                    Text = "Zone " + (z + 1),
+                    Dock = DockStyle.Fill,
+                    TextAlign = ContentAlignment.MiddleCenter,
+                    Cursor = Cursors.Hand
+                };
+                lbl.Click += (s, e) => ZonePanel_Click(p, e);
+                p.Click += ZonePanel_Click;
+                p.Controls.Add(lbl);
+
+                groupKbdZones.Controls.Add(p);
+            }
+
+            // Reposition Apply button
+            btnKbdApplyZones.Location = new Point(8 + zones * (btnW + zGap) + zGap, zTop);
+            
+            UpdateZonePanelColors();
+        }
+
         private void ZonePanel_Click(object? sender, EventArgs e)
         {
-            if (sender is Panel p && p.Tag is int zoneIndex)
+            Panel? p = sender as Panel;
+            if (p is null) return;
+            if (p.Tag is int zoneIndex)
             {
                 using var dlg = new ColorDialog();
                 dlg.Color = _zoneColors[zoneIndex];
@@ -219,19 +345,24 @@ namespace GHelper
                     ForeColor = IsColorDark(_lightBarColors[z]) ? Color.White : Color.Black,
                 };
                 p.Controls.Add(lbl);
-                p.Click += (_, _) =>
-                {
-                    using var dlg = new ColorDialog();
-                    dlg.Color = _lightBarColors[zCopy];
-                    dlg.FullOpen = true;
-                    if (dlg.ShowDialog(this) == DialogResult.OK)
-                    {
-                        _lightBarColors[zCopy] = dlg.Color;
-                        p.BackColor = dlg.Color;
-                        lbl.ForeColor = IsColorDark(dlg.Color) ? Color.White : Color.Black;
-                    }
-                };
+                p.Click += (s, e) => OpenLightBarColorDialog(zCopy, p, lbl);
+                // Forward label clicks to the same handler (the docked
+                // label would otherwise swallow clicks).
+                lbl.Click += (s, e) => OpenLightBarColorDialog(zCopy, p, lbl);
                 panelLbZones.Controls.Add(p);
+            }
+        }
+
+        private void OpenLightBarColorDialog(int zoneIndex, Panel p, Label lbl)
+        {
+            using var dlg = new ColorDialog();
+            dlg.Color = _lightBarColors[zoneIndex];
+            dlg.FullOpen = true;
+            if (dlg.ShowDialog(this) == DialogResult.OK)
+            {
+                _lightBarColors[zoneIndex] = dlg.Color;
+                p.BackColor = dlg.Color;
+                lbl.ForeColor = IsColorDark(dlg.Color) ? Color.White : Color.Black;
             }
         }
 
@@ -286,14 +417,14 @@ namespace GHelper
             var text = combo.SelectedItem?.ToString();
             if (text == "Breathing") return OmenLightingEffect.Breathing;
             if (text == "Color Cycle") return OmenLightingEffect.ColorCycle;
+            if (text == "Wave") return OmenLightingEffect.Wave;
+            if (text == "Blinking") return OmenLightingEffect.Strobe;
             return OmenLightingEffect.Static;
         }
 
         private void ComboKbdEffect_SelectedIndexChanged(object? sender, EventArgs e)
         {
             var effect = GetSelectedEffect(comboKbdEffect);
-            // Color pickers are useful for Static, Breathing, Wave, Strobe
-            // ColorCycle auto-generates rainbow so hide them
             panelEffColors.Visible = effect != OmenLightingEffect.ColorCycle;
         }
 
@@ -304,7 +435,7 @@ namespace GHelper
         }
 
         // ──────────────────────────────────────────────────────────────────
-        // Apply handlers
+        // Apply handlers (zone keyboard + lightbar)
         // ──────────────────────────────────────────────────────────────────
 
         private void BtnKbdApplyZones_Click(object? sender, EventArgs e)
@@ -333,19 +464,15 @@ namespace GHelper
             bool ok;
             if (effect == OmenLightingEffect.Static)
             {
-                // Static — use per-zone colours
                 ok = _lighting.SetLightBarZoneColors(_lightBarColors);
             }
             else
             {
-                // Animated — pass effect + optional colour set
                 Color[]? colors = (effect != OmenLightingEffect.ColorCycle) ? _effectColors : null;
                 ok = _lighting.SetLightBarEffect(effect, brightness, speed, colors);
             }
 
-            // Also set brightness separately (some firmware needs this)
             _lighting.SetLightBarBrightness(brightness);
-
             FlashButton(btnLbApply, ok);
         }
 

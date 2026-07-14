@@ -25,58 +25,60 @@ internal sealed class OmenBackend : IDisposable
     // ====================================================================================================
 
     private readonly LoggingService _logging;
-    private readonly HpWmiBios _bios;
-    private readonly IFanController _fans;
+    // Nullable: HpWmiBios construction can fail (e.g. CIM access denied) and TryCreate
+    // defends in depth — accesses must be null-safe.
+    private readonly HpWmiBios? _bios;
+    // Nullable: both WMI and EC fan controllers can fail to initialize.
+    private readonly IFanController? _fans;
     private readonly WmiBiosMonitor? _monitor; // [NEW] High-precision monitor
-    private readonly IMsrAccess? _msrAccess;
+    private readonly IMsrAccess? _msrAccess;   // PawnIO MSR — null on Ryzen or if PawnIO not installed
+    private OmenCore.Hardware.IMmioAccess? _mmioAccess;
+    private OmenCore.Hardware.MmioPowerLimitProvider? _mmioLimits;
     private readonly byte[][] _curves = new byte[2][];
     private int? _targetCpuPl1;
     private int? _targetCpuPl2;
     private int _lastEvaluatedCpuPercent = -1;
     private int _lastEvaluatedGpuPercent = -1;
 
-    // [MODIFIED] Constructor now accepts WmiBiosMonitor
-    private OmenBackend(LoggingService logging, HpWmiBios bios, IFanController fans, WmiBiosMonitor monitor, IMsrAccess? msrAccess)
+    // [MODIFIED] Constructor now accepts WmiBiosMonitor + msrAccess
+    private OmenBackend(LoggingService logging, HpWmiBios? bios, IFanController? fans, WmiBiosMonitor? monitor, IMsrAccess? msrAccess)
     {
         _logging = logging;
         _bios = bios;
         _fans = fans;
-        _monitor = monitor; // [NEW]
+        _monitor = monitor;
         _msrAccess = msrAccess;
         _curves[(int)AsusFan.CPU] = DefaultCurve(AsusFan.CPU);
         _curves[(int)AsusFan.GPU] = DefaultCurve(AsusFan.GPU);
-        
-        // Read CPU's actual max power from MSR 0x614 or MMIO for the slider max
+
+        // Read CPU's actual max power from MSR 0x614 or MMIO for the slider max (Intel only)
         if (msrAccess?.IsAvailable == true && !PawnIO.CpuInfo.IsAMD)
         {
             int maxPower = -1;
             bool fromMmio = false;
-            
-            try 
+
+            try
             {
                 var mmioAccess = new OmenCore.Hardware.PawnIOMmioAccess((OmenCore.Hardware.PawnIOMsrAccess)msrAccess);
-                if (mmioAccess.IsAvailable) 
+                if (mmioAccess.IsAvailable)
                 {
                     var mmioLimits = new OmenCore.Hardware.MmioPowerLimitProvider(mmioAccess);
-                    if (mmioLimits.IsAvailable) 
+                    if (mmioLimits.IsAvailable)
                     {
                         maxPower = mmioLimits.ReadMaxPowerWatts();
                         var limits = mmioLimits.GetPowerLimits();
-                        
-                        // If max power info is suspiciously low or fallback, use the BIOS's dynamic PL2 limit
                         if (limits.Pl2Watts > maxPower && limits.Pl2Watts < 500)
                             maxPower = (int)Math.Round(limits.Pl2Watts);
-                            
                         fromMmio = true;
                     }
                 }
-            } 
+            }
             catch { }
-            
+
             if (maxPower <= 0)
                 maxPower = msrAccess.ReadMaxPowerWatts();
-                
-            if (maxPower > 0 && maxPower < 500) // sanity check
+
+            if (maxPower > 0 && maxPower < 500)
             {
                 AsusACPI.MaxTotal = Math.Max(maxPower, 150);
                 Logger.WriteLine($"[OmenBackend] MaxTotal set to {AsusACPI.MaxTotal}W (detected {maxPower}W from {(fromMmio ? "MMIO" : "MSR")})");
@@ -96,8 +98,8 @@ internal sealed class OmenBackend : IDisposable
     }
     */
 
-    public bool IsAvailable => _bios.IsAvailable || _fans.IsAvailable;
-    private bool HasCpuPowerLimitControl => !CpuInfo.IsAMD && (_bios.IsAvailable || _msrAccess?.IsAvailable == true);
+    public bool IsAvailable => (_bios?.IsAvailable ?? false) || (_fans?.IsAvailable ?? false);
+    private bool HasCpuPowerLimitControl => !CpuInfo.IsAMD && (_msrAccess?.IsAvailable == true || (_bios?.IsAvailable ?? false));
 
     // ── Lighting ──────────────────────────────────────────────────────────
     private OmenCore.Hardware.OmenLightingService? _lightingService;
@@ -108,7 +110,7 @@ internal sealed class OmenBackend : IDisposable
     /// </summary>
     public OmenCore.Hardware.OmenLightingService? GetLightingService()
     {
-        if (!_bios.IsAvailable) return null;
+        if (_bios == null || !_bios.IsAvailable) return null;
         if (_lightingService == null)
         {
             _lightingService = new OmenCore.Hardware.OmenLightingService(_bios, _logging);
@@ -121,44 +123,106 @@ internal sealed class OmenBackend : IDisposable
     {
         if (!IsHpOmenSystem()) return null;
 
+        LoggingService? logging = null;
+        HpWmiBios? bios = null;
+        IFanController? fans = null;
+        NvapiService? nvapi = null;
+        WmiBiosMonitor? monitor = null;
+        IMsrAccess? msrAccess = null;
+
         try
         {
-            var logging = new LoggingService();
+            logging = new LoggingService();
             logging.Initialize();
             logging.LogEmitted += Logger.WriteLine;
 
-            var bios = new HpWmiBios(logging);
-            
-            var wmiFans = new WmiFanController(null, logging, injectedWmiBios: bios);
-            IFanController fans = new OmenCore.Hardware.WmiFanControllerWrapper(wmiFans, logging);
-            if (!wmiFans.IsAvailable)
+            try
             {
-                var ecAccess = OmenCore.Hardware.EcAccessFactory.GetEcAccess();
-                var registerMap = new System.Collections.Generic.Dictionary<string, int>();
-                var baseController = new OmenCore.Hardware.FanController(ecAccess, registerMap, null, logging, bios);
-                fans = new OmenCore.Hardware.EcFanControllerWrapper(baseController, null, logging);
-                Logger.WriteLine("OMEN backend: WMI Fan Controller not available. Falling back to Legacy EC Fan Controller.");
+                bios = new HpWmiBios(logging);
             }
-            
-            var msrAccess = MsrAccessFactory.Create(logging);
+            catch (Exception ex)
+            {
+                Logger.WriteLine($"OMEN backend: HpWmiBios construction threw: {ex.GetType().Name}: {ex.Message}");
+                bios = null;
+            }
 
-            // [NEW] Initialize high-precision monitor components
-            var nvapi = new NvapiService(logging);
-            var monitor = new WmiBiosMonitor(logging, nvapi);
+            try
+            {
+                var wmiFans = new WmiFanController(null, logging, injectedWmiBios: bios);
+                fans = new OmenCore.Hardware.WmiFanControllerWrapper(wmiFans, logging);
+                if (!wmiFans.IsAvailable)
+                {
+                    var ecAccess = OmenCore.Hardware.EcAccessFactory.GetEcAccess();
+                    var registerMap = new System.Collections.Generic.Dictionary<string, int>();
+                    var baseController = new OmenCore.Hardware.FanController(ecAccess, registerMap, null, logging, bios);
+                    fans = new OmenCore.Hardware.EcFanControllerWrapper(baseController, null, logging);
+                    Logger.WriteLine($"OMEN backend: WMI Fan Controller not available. Falling back to Legacy EC Fan Controller (EC access: {(ecAccess?.IsAvailable == true ? "available" : "unavailable — no PawnIO/WinRing0")}).");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLine($"OMEN backend: Fan controller init failed: {ex.GetType().Name}: {ex.Message}");
+                Logger.WriteLine($"OMEN backend: Fan controller stack: {ex.StackTrace}");
+                fans = null;
+            }
 
-            Logger.WriteLine($"OMEN backend: BIOS={bios.Status}, Fans={fans.Status}, MSR={MsrAccessFactory.StatusMessage}, Monitor={monitor.MonitoringSource}");
-            
-            // [MODIFIED] Return backend with monitor
+            try
+            {
+                nvapi = new NvapiService(logging);
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLine($"OMEN backend: NvapiService init failed: {ex.GetType().Name}: {ex.Message}");
+                nvapi = null;
+            }
+
+            try
+            {
+                monitor = new WmiBiosMonitor(logging, nvapi);
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLine($"OMEN backend: WmiBiosMonitor init failed: {ex.GetType().Name}: {ex.Message}");
+                Logger.WriteLine($"OMEN backend: WmiBiosMonitor stack: {ex.StackTrace}");
+                monitor = null;
+            }
+
+            // MSR access for Intel CPU power limits (PawnIO). Not used on AMD.
+            if (!PawnIO.CpuInfo.IsAMD)
+            {
+                try
+                {
+                    msrAccess = MsrAccessFactory.Create(logging);
+                    if (msrAccess?.IsAvailable == true)
+                        Logger.WriteLine("OMEN backend: MSR access available (PawnIO) — Intel power limits enabled.");
+                    else
+                        Logger.WriteLine("OMEN backend: MSR access unavailable (PawnIO not loaded?) — Intel power limits disabled.");
+                }
+                catch (Exception ex)
+                {
+                    Logger.WriteLine($"OMEN backend: MSR access init failed: {ex.GetType().Name}: {ex.Message}");
+                    msrAccess = null;
+                }
+            }
+
+            Logger.WriteLine($"OMEN backend: BIOS={bios?.Status ?? "null"}, Fans={fans?.Status ?? "null"}, Monitor={monitor?.MonitoringSource ?? "null"}");
+
+            // [MODIFIED] Return backend with monitor + MSR access
             return new OmenBackend(logging, bios, fans, monitor, msrAccess);
 
             /* [LEGACY TRYCREATE RETURN]
-            Logger.WriteLine($"OMEN backend: BIOS={bios.Status}, Fans={fans.Status}, MSR={MsrAccessFactory.StatusMessage}");
-            return new OmenBackend(logging, bios, fans, msrAccess);
+            Logger.WriteLine($"OMEN backend: BIOS={bios?.Status ?? "null"}, Fans={fans?.Status ?? "null"}");
+            return new OmenBackend(logging, bios, fans, null);
             */
         }
         catch (Exception ex)
         {
-            Logger.WriteLine($"OMEN backend init failed: {ex.Message}");
+            Logger.WriteLine($"OMEN backend init failed: {ex.GetType().Name}: {ex.Message}");
+            Logger.WriteLine($"OMEN backend init stack trace: {ex.StackTrace}");
+            if (ex.InnerException != null)
+            {
+                Logger.WriteLine($"OMEN backend init inner: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}");
+            }
             return null;
         }
     }
@@ -194,19 +258,19 @@ internal sealed class OmenBackend : IDisposable
             AsusACPI.DevsCPUFan or AsusACPI.DevsGPUFan => IsAvailable,
             AsusACPI.CPU_Fan or AsusACPI.GPU_Fan => IsAvailable,
             AsusACPI.PerformanceMode => IsAvailable,
-            AsusACPI.BatteryLimit => _bios.IsAvailable,
+            AsusACPI.BatteryLimit => _bios?.IsAvailable ?? false,
             
             // [MODIFIED] Temps now supported as long as either BIOS or Monitor is available
             AsusACPI.Temp_CPU or AsusACPI.Temp_GPU => IsAvailable,
             /* [LEGACY SUPPORT] 
-            AsusACPI.Temp_CPU or AsusACPI.Temp_GPU => _bios.IsAvailable, 
+            AsusACPI.Temp_CPU or AsusACPI.Temp_GPU => _bios?.IsAvailable ?? false, 
             */
             
-            AsusACPI.GPUEcoROG or AsusACPI.GPUEcoVivo => _bios.IsAvailable, // OMEN has Optimus (iGPU-only) mode
-            AsusACPI.GPUMuxROG or AsusACPI.GPUMuxVivo => _bios.IsAvailable, // Hybrid/Discrete MUX
-            AsusACPI.GPU_POWER => _bios.IsAvailable,
-            AsusACPI.PPT_GPUC0 => _bios.IsAvailable, // Dynamic Boost
-            AsusACPI.PPT_APUA0 or AsusACPI.PPT_APUA3 or AsusACPI.PPT_APUC1 => HasCpuPowerLimitControl,
+            AsusACPI.GPUEcoROG or AsusACPI.GPUEcoVivo => _bios?.IsAvailable ?? false, // OMEN has Optimus (iGPU-only) mode
+            AsusACPI.GPUMuxROG or AsusACPI.GPUMuxVivo => _bios?.IsAvailable ?? false, // Hybrid/Discrete MUX
+            AsusACPI.GPU_POWER => _bios?.IsAvailable ?? false,
+            AsusACPI.PPT_GPUC0 => _bios?.IsAvailable ?? false, // Dynamic Boost
+            AsusACPI.PPT_APUA3 or AsusACPI.PPT_APUA0 or AsusACPI.PPT_APUC1 => HasCpuPowerLimitControl,
             _ => false
         };
 
@@ -226,14 +290,14 @@ internal sealed class OmenBackend : IDisposable
                 _ => "Balanced"
             };
 
-            result = _fans.SetPerformanceMode(mode) ? 1 : -1;
+            result = (_fans?.SetPerformanceMode(mode) ?? false) ? 1 : -1;
             Logger.WriteLine($"{logName ?? "OmenMode"} = {mode} : {(result == 1 ? "OK" : result)}");
             return true;
         }
 
         if (deviceId == AsusACPI.BatteryLimit)
         {
-            result = _bios.SetBatteryCareMode(status < 100) ? 1 : -1;
+            result = (_bios?.SetBatteryCareMode(status < 100) ?? false) ? 1 : -1;
             Logger.WriteLine($"{logName ?? "OmenBatteryLimit"} = {(status < 100 ? "80%" : "100%")} : {(result == 1 ? "OK" : result)}");
             return true;
         }
@@ -259,16 +323,14 @@ internal sealed class OmenBackend : IDisposable
             else if (powerTarget <= 10) 
                 level = HpWmiBios.GpuPowerLevel.Minimum; // Standard TGP
 
-            result = _bios.SetGpuPower(level) ? 1 : -1;
+            result = (_bios?.SetGpuPower(level) ?? false) ? 1 : -1;
             Logger.WriteLine($"{logName ?? (deviceId == AsusACPI.GPU_POWER ? "OmenGpuPower" : "OmenDynamicBoost")} = {level} (TGP:{powerTarget}W Boost:{dynamicBoost}W) : {(result == 1 ? "OK" : result)}");
             return true;
         }
 
         if (deviceId == AsusACPI.PPT_APUA3 || deviceId == AsusACPI.PPT_APUA0 || deviceId == AsusACPI.PPT_APUC1)
         {
-            // PPT_APUC1 (fPPT) maps to PL2 on Intel, same as PPT_APUA0
-            uint effectiveId = (deviceId == AsusACPI.PPT_APUC1) ? AsusACPI.PPT_APUA0 : deviceId;
-            result = SetCpuPowerLimit(effectiveId, status) ? 1 : -1;
+            result = SetCpuPowerLimit(deviceId, status) ? 1 : -1;
             Logger.WriteLine($"{logName ?? "OmenPowerLimit"} = {status}W : {(result == 1 ? "OK" : result)}");
             return true;
         }
@@ -289,7 +351,7 @@ internal sealed class OmenBackend : IDisposable
     public bool TrySetGpuEco(int eco, out int result)
     {
         result = -1;
-        if (!_bios.IsAvailable) return false;
+        if (_bios == null || !_bios.IsAvailable) return false;
         // eco=1 → iGPU-only (Optimus), eco=0 → Hybrid (both GPUs)
         var targetMode = eco == 1 ? HpWmiBios.GpuMode.Optimus : HpWmiBios.GpuMode.Hybrid;
         result = _bios.SetGpuMode(targetMode) ? 1 : -1;
@@ -311,34 +373,44 @@ internal sealed class OmenBackend : IDisposable
             {
                 try
                 {
-                    // Use the high-precision monitor which handles ACPI thermal zones and LHM fallbacks
-                    var sample = Task.Run(() => _monitor.ReadSampleAsync(default)).GetAwaiter().GetResult();
-                    double temp = (deviceId == AsusACPI.Temp_CPU) ? sample.CpuTemperatureC : sample.GpuTemperatureC;
-                    if (temp > 0)
+                    if (_monitor == null)
                     {
-                        result = (int)Math.Round(temp);
-                        return true;
+                        Logger.WriteLine("[OmenBackend.TryDeviceGet] Temp requested but WmiBiosMonitor is null — falling back to BIOS temp.");
+                    }
+                    else
+                    {
+                        // Use the high-precision monitor which handles ACPI thermal zones and LHM fallbacks
+                        var sample = Task.Run(() => _monitor.ReadSampleAsync(default)).GetAwaiter().GetResult();
+                        double temp = (deviceId == AsusACPI.Temp_CPU) ? sample.CpuTemperatureC : sample.GpuTemperatureC;
+                        if (temp > 0)
+                        {
+                            result = (int)Math.Round(temp);
+                            return true;
+                        }
                     }
                 }
-                catch { }
+                catch (Exception ex)
+                {
+                    Logger.WriteLine($"[OmenBackend.TryDeviceGet] Monitor.ReadSampleAsync failed: {ex.GetType().Name}: {ex.Message}");
+                }
             }
         }
 
         result = deviceId switch
         {
             AsusACPI.PerformanceMode => 0,
-            AsusACPI.BatteryLimit => (_bios.GetBatteryCareMode() ?? false) ? 80 : 100,
+            AsusACPI.BatteryLimit => (_bios?.GetBatteryCareMode() ?? false) ? 80 : 100,
             AsusACPI.CPU_Fan => ReadFanRpm(cpu: true),
             AsusACPI.GPU_Fan => ReadFanRpm(cpu: false),
             AsusACPI.DevsCPUFanCurve or AsusACPI.DevsGPUFanCurve => IsAvailable ? 1 : -1,
             AsusACPI.DevsCPUFan or AsusACPI.DevsGPUFan => IsAvailable ? 1 : -1,
             
             // [MODIFIED] High-precision path above intercepting; switched to legacy fallbacks here
-            AsusACPI.Temp_CPU => (int)(_bios.GetTemperature() ?? -1),
-            AsusACPI.Temp_GPU => (int)(_bios.GetGpuTemperature() ?? -1),
+            AsusACPI.Temp_CPU => (int)(_bios?.GetTemperature() ?? -1),
+            AsusACPI.Temp_GPU => (int)(_bios?.GetGpuTemperature() ?? -1),
             /* [LEGACY GET]
-            AsusACPI.Temp_CPU => (int)(_bios.GetTemperature() ?? -1),
-            AsusACPI.Temp_GPU => (int)(_bios.GetGpuTemperature() ?? -1),
+            AsusACPI.Temp_CPU => (int)(_bios?.GetTemperature() ?? -1),
+            AsusACPI.Temp_GPU => (int)(_bios?.GetGpuTemperature() ?? -1),
             */
 
             // GPUEco: 1 = currently in Optimus/iGPU-only mode, 0 = not in eco mode
@@ -346,8 +418,8 @@ internal sealed class OmenBackend : IDisposable
             // GPUMux: Discrete=0 (Ultimate), Hybrid=1 (Standard)
             AsusACPI.GPUMuxROG or AsusACPI.GPUMuxVivo => ReadGpuMuxFlag(),
             AsusACPI.GPU_POWER => ReadGpuPowerFlag(),
-            AsusACPI.PPT_APUA3 => ReadCpuPowerLimit(pl2: false),
-            AsusACPI.PPT_APUA0 or AsusACPI.PPT_APUC1 => ReadCpuPowerLimit(pl2: true),
+            AsusACPI.PPT_APUA3 => ReadCpuPowerLimit(false),
+            AsusACPI.PPT_APUA0 or AsusACPI.PPT_APUC1 => ReadCpuPowerLimit(true),
             _ => int.MinValue
         };
 
@@ -358,7 +430,7 @@ internal sealed class OmenBackend : IDisposable
     {
         try
         {
-            var mode = _bios.GetGpuMode();
+            var mode = _bios?.GetGpuMode();
             if (mode.HasValue)
                 return mode.Value == HpWmiBios.GpuMode.Optimus ? 1 : 0;
         }
@@ -370,7 +442,7 @@ internal sealed class OmenBackend : IDisposable
     {
         try
         {
-            var mode = _bios.GetGpuMode();
+            var mode = _bios?.GetGpuMode();
             if (mode.HasValue)
                 // Discrete = Ultimate (mux=0), Hybrid/Optimus = Standard (mux=1)
                 return mode.Value == HpWmiBios.GpuMode.Discrete ? 0 : 1;
@@ -383,7 +455,7 @@ internal sealed class OmenBackend : IDisposable
     {
         try
         {
-            var power = _bios.GetGpuPower();
+            var power = _bios?.GetGpuPower();
             if (power.HasValue)
             {
                 // Map back to a UI wattage slider approximation
@@ -396,27 +468,12 @@ internal sealed class OmenBackend : IDisposable
         return 15;
     }
 
-    private OmenCore.Hardware.IMmioAccess? _mmioAccess;
-    private OmenCore.Hardware.MmioPowerLimitProvider? _mmioLimits;
-    private bool _mmioInitAttempted = false;
-
     private bool SetCpuPowerLimit(uint deviceId, int watts)
     {
         if (!HasCpuPowerLimitControl)
         {
-            Logger.WriteLine("OmenPowerLimit: Backend unavailable (needs BIOS WMI or MSR)");
+            Logger.WriteLine("OmenPowerLimit: No backend available");
             return false;
-        }
-
-        // Get current limits to use as defaults for the other PL
-        int currentPl1 = AsusACPI.DefaultTotal;
-        int currentPl2 = AsusACPI.DefaultTotal;
-        
-        if (_msrAccess != null)
-        {
-            var status = _msrAccess.GetPowerLimitStatus();
-            if (status.Pl1Watts > 0) currentPl1 = (int)Math.Round(status.Pl1Watts);
-            if (status.Pl2Watts > 0) currentPl2 = (int)Math.Round(status.Pl2Watts);
         }
 
         if (deviceId == AsusACPI.PPT_APUA3)
@@ -424,115 +481,102 @@ internal sealed class OmenBackend : IDisposable
         else
             _targetCpuPl2 = watts;
 
-        int pl1 = Math.Clamp(_targetCpuPl1 ?? currentPl1, AsusACPI.MinTotal, AsusACPI.MaxTotal);
-        int pl2 = Math.Clamp(_targetCpuPl2 ?? currentPl2, AsusACPI.MinTotal, 200);
-        if (pl2 < pl1) pl2 = pl1;
+        int pl1 = Math.Clamp(_targetCpuPl1 ?? AsusACPI.DefaultTotal, AsusACPI.MinTotal, AsusACPI.MaxTotal);
 
-        bool wmiSuccess = false;
-        bool msrSuccess = false;
-        
-        // 1. Primary: OMEN WMI Native Command
-        if (_bios.IsAvailable)
-        {
-            wmiSuccess = _bios.SetCpuPowerLimit(pl1, pl2);
-            if (wmiSuccess)
-                Logger.WriteLine($"OmenPowerLimit: WMI write OK — PL1={pl1}W, PL2={pl2}W");
-            else
-                Logger.WriteLine("OmenPowerLimit: WMI write failed/unverified.");
-        }
+        bool anySuccess = false;
 
-        // 2. Secondary: PawnIO MSR write to 0x610 (ThrottleStop method)
+        // Path 1: PawnIO MSR write (PL1 + PL2 via MSR 0x610)
         if (_msrAccess != null)
         {
-            msrSuccess = _msrAccess.SetPowerLimits(pl1, pl2);
-            if (msrSuccess)
-                Logger.WriteLine($"OmenPowerLimit: MSR write OK — PL1={pl1}W, PL2={pl2}W");
-            else
-                Logger.WriteLine("OmenPowerLimit: MSR write failed/unverified.");
-        }
+            var status = _msrAccess.GetPowerLimitStatus();
+            int currentPl1 = status.Pl1Watts > 0 ? (int)Math.Round(status.Pl1Watts) : AsusACPI.DefaultTotal;
+            int currentPl2 = status.Pl2Watts > 0 ? (int)Math.Round(status.Pl2Watts) : Math.Max(currentPl1, AsusACPI.DefaultTotal);
 
-        // Always attempt WinRing0 MMIO sync (write directly to MCHBAR+0x59A0) 
-        // as MMIO overrides MSR on Meteor Lake and newer platforms.
-        if (_mmioLimits == null)
-        {
-            if (_mmioAccess == null && _msrAccess != null && !_mmioInitAttempted)
+            int msrPl1 = Math.Clamp(_targetCpuPl1 ?? currentPl1, AsusACPI.MinTotal, AsusACPI.MaxTotal);
+            int pl2 = Math.Clamp(_targetCpuPl2 ?? currentPl2, AsusACPI.MinTotal, 200);
+            if (pl2 < msrPl1) pl2 = msrPl1;
+
+            bool msrSuccess = _msrAccess.SetPowerLimits(msrPl1, pl2);
+
+            if (msrSuccess)
+                Logger.WriteLine($"OmenPowerLimit: MSR write OK — PL1={msrPl1}W, PL2={pl2}W");
+            else
+                Logger.WriteLine("OmenPowerLimit: MSR write failed/unverified. Trying MMIO fallback...");
+
+            anySuccess |= msrSuccess;
+
+            // MMIO sync (write directly to MCHBAR+0x59A0)
+            // as MMIO overrides MSR on Meteor Lake and newer platforms.
+            if (_mmioLimits == null)
             {
-                _mmioInitAttempted = true;
-                if (_msrAccess is not OmenCore.Hardware.PawnIOMsrAccess pawnMsr)
+                if (_mmioAccess == null)
                 {
-                    Logger.WriteLine($"OmenPowerLimit: MMIO sync skipped — MSR backend is {_msrAccess.GetType().Name}, not PawnIOMsrAccess.");
-                }
-                else
-                {
-                    _mmioAccess = new OmenCore.Hardware.PawnIOMmioAccess(pawnMsr);
+                    _mmioAccess = new OmenCore.Hardware.PawnIOMmioAccess((OmenCore.Hardware.PawnIOMsrAccess)_msrAccess);
                     if (!_mmioAccess.IsAvailable)
                     {
-                        Logger.WriteLine("OmenPowerLimit: PawnIO MMIO fallback unavailable (IntelMCHBAR module load failed?).");
+                        Logger.WriteLine("OmenPowerLimit: PawnIO MMIO fallback unavailable.");
                         _mmioAccess = null;
                     }
                 }
+                if (_mmioAccess != null)
+                    _mmioLimits = new OmenCore.Hardware.MmioPowerLimitProvider(_mmioAccess);
             }
-            if (_mmioAccess != null)
+
+            bool mmioSuccess = false;
+            if (_mmioLimits != null && _mmioLimits.IsAvailable && _mmioLimits.CanWriteLimits)
             {
-                _mmioLimits = new OmenCore.Hardware.MmioPowerLimitProvider(_mmioAccess);
-                Logger.WriteLine($"OmenPowerLimit: MMIO provider init — Available={_mmioLimits.IsAvailable}, CanWrite={_mmioLimits.CanWriteLimits}, Locked={_mmioLimits.IsLocked}");
+                mmioSuccess = _mmioLimits.SetPowerLimits(msrPl1, pl2);
+                Logger.WriteLine($"OmenPowerLimit: MMIO write {(mmioSuccess ? "OK" : "FAILED")} — PL1={msrPl1}W, PL2={pl2}W");
             }
+            else if (_mmioLimits != null)
+            {
+                Logger.WriteLine("OmenPowerLimit: MMIO fallback not available or read-only.");
+            }
+
+            anySuccess |= mmioSuccess;
         }
 
-        bool mmioSuccess = false;
-        if (_mmioLimits != null && _mmioLimits.IsAvailable && _mmioLimits.CanWriteLimits)
+        // Path 2: WMI BIOS fallback (PL1 only — no PL2 via WMI)
+        if (_bios?.IsAvailable == true)
         {
-            // Read back the MSR value the hardware actually committed (TW bits may differ
-            // from what we requested), then XOR-RMW it straight into MMIO — exactly what
-            // ThrottleStop's "Sync MMIO" button does (FUN_00439f15 → MMIO mirror write).
-            ulong msr610 = 0;
-            try { msr610 = _msrAccess.ReadRawMsr(0x610); } catch { }
-
-            if (msr610 != 0)
-            {
-                _mmioLimits.SyncFromMsr(msr610);
-                mmioSuccess = true;
-                Logger.WriteLine($"OmenPowerLimit: MMIO SyncFromMsr OK — MSR 0x610 = 0x{msr610:X16}");
-            }
+            bool wmiSuccess = _bios.SetCpuPowerLimit(pl1);
+            if (wmiSuccess)
+                Logger.WriteLine($"OmenPowerLimit: WMI write OK — PL1={pl1}W");
             else
-            {
-                // Fallback: MSR read failed, reconstruct from watts directly
-                mmioSuccess = _mmioLimits.SetPowerLimits(pl1, pl2);
-                Logger.WriteLine($"OmenPowerLimit: MMIO SetPowerLimits fallback {(mmioSuccess ? "OK" : "FAILED")} — PL1={pl1}W PL2={pl2}W");
-            }
+                Logger.WriteLine("OmenPowerLimit: WMI write failed/unverified.");
+            anySuccess |= wmiSuccess;
         }
-        else if (_mmioLimits != null)
-        {
-            Logger.WriteLine("OmenPowerLimit: MMIO fallback not available or read-only.");
-        }
-        
-        return wmiSuccess || msrSuccess || mmioSuccess;
+
+        return anySuccess;
     }
 
     public double GetCpuPackagePowerWatts()
     {
         double power = 0.0;
-        
-        try
+
+        // Primary: high-precision monitor (WmiBiosMonitor). May be null if init failed.
+        if (_monitor != null)
         {
-            var sample = Task.Run(() => _monitor.ReadSampleAsync(default)).GetAwaiter().GetResult();
-            power = sample.CpuPowerWatts;
+            try
+            {
+                var sample = Task.Run(() => _monitor.ReadSampleAsync(default)).GetAwaiter().GetResult();
+                power = sample.CpuPowerWatts;
+            }
+            catch { }
         }
-        catch { }
 
         if (power > 0.0)
             return power;
 
         // Fallback to MSR
         power = _msrAccess?.ReadCpuPackagePowerWatts() ?? 0.0;
-        
+
         if (power <= 0.0)
         {
             if (_mmioLimits == null)
             {
-                if (_mmioAccess == null && !_mmioInitAttempted)
+                if (_mmioAccess == null)
                 {
-                    _mmioInitAttempted = true;
                     if (_msrAccess == null) return 0;
                     _mmioAccess = new OmenCore.Hardware.PawnIOMmioAccess((OmenCore.Hardware.PawnIOMsrAccess)_msrAccess);
                     if (!_mmioAccess.IsAvailable) { _mmioAccess = null; return 0; }
@@ -540,10 +584,10 @@ internal sealed class OmenBackend : IDisposable
                 _mmioLimits = new OmenCore.Hardware.MmioPowerLimitProvider(_mmioAccess);
                 Logger.WriteLine($"[TelemetryTrace] Initialized MMIO Provider: Available={_mmioLimits.IsAvailable}");
             }
-                
+
             power = _mmioLimits.ReadCpuPackagePowerWatts();
         }
-        
+
         return power;
     }
 
@@ -632,8 +676,8 @@ internal sealed class OmenBackend : IDisposable
 
         _curves[(int)device] = curve.ToArray();
 
-        int cpuTempRaw = (int)(HardwareControl.GetCPUTemp() ?? _bios.GetTemperature() ?? 0);
-        int gpuTempRaw = (int)(HardwareControl.GetGPUTemp() ?? _bios.GetGpuTemperature() ?? _bios.GetTemperature() ?? 0);
+        int cpuTempRaw = (int)(HardwareControl.GetCPUTemp() ?? _bios?.GetTemperature() ?? 0);
+        int gpuTempRaw = (int)(HardwareControl.GetGPUTemp() ?? _bios?.GetGpuTemperature() ?? _bios?.GetTemperature() ?? 0);
 
         // HP's Lamda_Increase and Lamda_Decrease constants from SwFanControlCustomFanCurve
         const double lamdaIncrease = 0.1;
@@ -739,41 +783,43 @@ internal sealed class OmenBackend : IDisposable
 
         if (!HasCpuPowerLimitControl) return false;
 
-        // If WMI is available, we assume the BIOS can write the limits natively
-        if (_bios.IsAvailable) return true;
-        
-        if (_msrAccess == null) return false;
-
-        var msrStatus = _msrAccess.GetPowerLimitStatus();
-        if (!msrStatus.IsLocked) return true;
-
-        try
+        // If we have MSR, check its lock status (and MMIO override)
+        if (_msrAccess != null)
         {
-            if (_mmioLimits == null)
+            var msrStatus = _msrAccess.GetPowerLimitStatus();
+            if (!msrStatus.IsLocked) return true;
+
+            try
             {
-                var mmioAccess = new OmenCore.Hardware.PawnIOMmioAccess((OmenCore.Hardware.PawnIOMsrAccess)_msrAccess);
-                if (mmioAccess.IsAvailable)
+                if (_mmioLimits == null)
                 {
-                    _mmioLimits = new OmenCore.Hardware.MmioPowerLimitProvider(mmioAccess);
+                    var mmioAccess = new OmenCore.Hardware.PawnIOMmioAccess((OmenCore.Hardware.PawnIOMsrAccess)_msrAccess);
+                    if (mmioAccess.IsAvailable)
+                    {
+                        _mmioLimits = new OmenCore.Hardware.MmioPowerLimitProvider(mmioAccess);
+                    }
+                }
+
+                if (_mmioLimits != null && _mmioLimits.IsAvailable)
+                {
+                    var mmioStatus = _mmioLimits.GetPowerLimits();
+                    if (!mmioStatus.IsLocked) return true;
                 }
             }
-
-            if (_mmioLimits != null && _mmioLimits.IsAvailable)
-            {
-                var mmioStatus = _mmioLimits.GetPowerLimits();
-                if (!mmioStatus.IsLocked) return true;
-            }
+            catch { }
         }
-        catch { }
+        
+        // If we don't have MSR, but we DO have BIOS WMI, assume writeable
+        if (_bios?.IsAvailable == true) return true;
 
         return false;
     }
 
     public void Dispose()
     {
-        _bios.Dispose();
-        _fans.Dispose();
-        _monitor.Dispose();
+        try { _monitor?.Dispose(); } catch { }
+        try { _fans?.Dispose(); } catch { }
+        try { _bios?.Dispose(); } catch { }
     }
 }
 

@@ -1033,10 +1033,9 @@ namespace GHelper
             {
                 if (!CpuInfo.IsAMD)
                 {
-                    // Two limits (PL1 and PL2) using OMEN WMI
-                    labelLeftTotal.Text = "PL1 (Sustained)";
-                    labelLeftSlow.Text = "PL2 (Boost)";
-                    panelSlow.Visible = true;
+                    // Single slider — MSR write sets both PL1+PL2 atomically
+                    labelLeftTotal.Text = "CPU Power Limit";
+                    panelSlow.Visible = false;
                     panelFast.Visible = false;
                     panelCPU.Visible = false;
                 }

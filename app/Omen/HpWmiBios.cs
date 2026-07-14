@@ -1000,15 +1000,15 @@ namespace OmenCore.Hardware
         }
 
         /// <summary>
-        /// Set CPU Power Limits (PL1/PL2) using native OMEN WMI commands.
+        /// Set CPU Power Limits (PL1) using native OMEN WMI commands.
         /// </summary>
-        public bool SetCpuPowerLimit(int pl1, int pl2)
+        public bool SetCpuPowerLimit(int pl1)
         {
             if (!_isAvailable) return false;
 
             try
             {
-                if (pl1 > 254 || pl2 > 254)
+                if (pl1 > 254)
                 {
                     // Use two-byte command (0x37 / 55) for limits > 254W
                     byte[] data = new byte[128];
@@ -1018,8 +1018,8 @@ namespace OmenCore.Hardware
                     data[3] = byte.MaxValue; // PL4 MSB
                     data[4] = 0;
                     data[5] = 0;
-                    data[6] = (byte)(pl2 & 0xFF);
-                    data[7] = (byte)((pl2 >> 8) & 0xFF);
+                    data[6] = 255; // PL2 LSB (ignored/unused)
+                    data[7] = 255; // PL2 MSB
                     data[8] = 0;
                     data[9] = 0;
                     data[10] = (byte)(pl1 & 0xFF);
@@ -1027,22 +1027,21 @@ namespace OmenCore.Hardware
                     data[12] = 0;
                     data[13] = 0;
 
-                    _logging?.Info($"Sending Two-Byte CPU power limit command: PL1={pl1}W, PL2={pl2}W");
+                    _logging?.Info($"Sending Two-Byte CPU power limit command: PL1={pl1}W");
                     var result = SendBiosCommand(BiosCmd.Default, CMD_POWER_LIMIT_2BYTE, data, 0);
                     return result != null;
                 }
                 else
                 {
                     // Use one-byte command (0x29 / 41) for standard limits
-                    // OGH's code passes 255 for PL2 on Intel, but passing our value might work on some BIOSes.
-                    // If it fails on Intel, it will just be ignored by the BIOS.
+                    // OGH's code passes 255 for PL2 on Intel.
                     byte[] data = new byte[4];
-                    data[0] = (byte)pl2;
+                    data[0] = 255; // PL2 (ignored)
                     data[1] = (byte)pl1;
                     data[2] = 255; // PL4
                     data[3] = 255; // Concurrent TDP
 
-                    _logging?.Info($"Sending One-Byte CPU power limit command: PL1={pl1}W, PL2={pl2}W");
+                    _logging?.Info($"Sending One-Byte CPU power limit command: PL1={pl1}W");
                     var result = SendBiosCommand(BiosCmd.Default, CMD_POWER_LIMIT_SET, data, 0);
                     return result != null;
                 }
@@ -1120,7 +1119,8 @@ namespace OmenCore.Hardware
             Standard = 0x00,    // Standard layout
             WithNumPad = 0x01,  // Standard layout with numerical block
             TenKeyLess = 0x02,  // Extra navigation keys but no numerical block (most OMEN laptops)
-            PerKeyRgb = 0x03    // Per-key RGB (not supported for zone control)
+            PerKeyRgb = 0x03,   // Per-key RGB (not supported for zone control)
+            TenKeyLessPerKeyRgb = 0x06 // Transcend 14 Per-Key RGB
         }
         
         /// <summary>
@@ -1373,28 +1373,23 @@ namespace OmenCore.Hardware
                 // Build proper 128-byte ColorTable structure per OmenMon format
                 var data = new byte[128];
                 
-                // Byte 0: Zone count (always 4 for standard 4-zone keyboards)
-                data[0] = 4;
+                // Byte 0: Zone count
+                data[0] = (byte)(zoneColors.Length / 3);
                 
                 // Bytes 1-24: Padding (leave as zeros)
                 const int COLOR_TABLE_PAD = 24;
                 
                 // Bytes 25+: Zone colors (RGB per zone)
-                // Input zoneColors should be 12 bytes: [R1,G1,B1,R2,G2,B2,R3,G3,B3,R4,G4,B4]
                 int colorOffset = 1 + COLOR_TABLE_PAD; // Byte 25
-                int colorsToCopy = Math.Min(zoneColors.Length, 12); // Max 4 zones x 3 bytes
+                int colorsToCopy = Math.Min(zoneColors.Length, 128 - colorOffset);
                 Array.Copy(zoneColors, 0, data, colorOffset, colorsToCopy);
                 
-                _logging?.Info($"SetColorTable: ZoneCount={data[0]}, Colors at offset {colorOffset}: " +
-                    $"Z0=#{data[colorOffset]:X2}{data[colorOffset+1]:X2}{data[colorOffset+2]:X2}, " +
-                    $"Z1=#{data[colorOffset+3]:X2}{data[colorOffset+4]:X2}{data[colorOffset+5]:X2}, " +
-                    $"Z2=#{data[colorOffset+6]:X2}{data[colorOffset+7]:X2}{data[colorOffset+8]:X2}, " +
-                    $"Z3=#{data[colorOffset+9]:X2}{data[colorOffset+10]:X2}{data[colorOffset+11]:X2}");
+                _logging?.Info($"SetColorTable: ZoneCount={data[0]}, copied {colorsToCopy} bytes at offset {colorOffset}");
 
                 var result = SendBiosCommand(BiosCmd.Keyboard, CMD_COLOR_SET, data, 0);
                 if (result != null)
                 {
-                    _logging?.Info($"✓ Keyboard color table set (128-byte OmenMon format)");
+                    _logging?.Info($"✓ Keyboard color table set (128-byte OmenMon format, {data[0]} zones)");
                     return true;
                 }
                 else

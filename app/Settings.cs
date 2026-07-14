@@ -1171,7 +1171,31 @@ namespace GHelper
 
         private void ButtonKeyboardColor_Click(object? sender, EventArgs e)
         {
-            if (AppConfig.IsDynamicLighting() || Program.acpi.HasOmenPerKeyRgb())
+            var omenLighting = Program.acpi?.GetLightingService();
+            if (omenLighting != null)
+            {
+                if (omenLighting.Capabilities.IsPerKey)
+                {
+                    // Ensure maximum hardware brightness so dynamic lighting isn't dim
+                    omenLighting.SetKeyboardBrightness(100);
+
+                    try
+                    {
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ms-settings:personalization-dynamiclighting") { UseShellExecute = true });
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.WriteLine("Failed to open Dynamic Lighting settings: " + ex.Message);
+                    }
+                    return;
+                }
+
+                var omenForm = new OmenLightingForm(omenLighting);
+                omenForm.ShowDialog();
+                return;
+            }
+
+            if (AppConfig.IsDynamicLighting())
             {
                 try
                 {
@@ -1184,27 +1208,19 @@ namespace GHelper
                 return;
             }
 
-            // ── OMEN WMI lighting: open the dedicated control form ────────
-            var lightingSvc = Program.acpi?.GetLightingService();
-            if (lightingSvc != null)
-            {
-                if (omenLightingForm == null || omenLightingForm.IsDisposed)
-                {
-                    omenLightingForm = new OmenLightingForm(lightingSvc);
-                    AddOwnedForm(omenLightingForm);
-                }
-                if (omenLightingForm.Visible)
-                    omenLightingForm.Focus();
-                else
-                    omenLightingForm.Show();
-                return;
-            }
-
             SetColorPicker("aura_color");
         }
 
         private void ButtonRearColor_Click(object? sender, EventArgs e)
         {
+            var omenLighting = Program.acpi?.GetLightingService();
+            if (omenLighting?.Capabilities.HasLightBar == true)
+            {
+                var omenForm = new OmenLightingForm(omenLighting, true);
+                omenForm.ShowDialog();
+                return;
+            }
+
             SetColorPicker("rear_color", pictureRearColor);
         }
 
@@ -1223,6 +1239,16 @@ namespace GHelper
         {
             if (!AppConfig.HasRearLight())
                 return;
+
+            if (Program.acpi?.GetLightingService()?.Capabilities.HasLightBar == true)
+            {
+                panelRearLight.Visible = true;
+                labelRearLight.Text = "Lightbar";
+                comboRearLight.Visible = false;
+                buttonRearColor.Click -= ButtonRearColor_Click;
+                buttonRearColor.Click += ButtonRearColor_Click;
+                return;
+            }
 
             Aura.RearMode = (AuraMode)AppConfig.Get("rear_mode");
             Aura.SetRearColor(AppConfig.Get("rear_color"));
@@ -1269,6 +1295,16 @@ namespace GHelper
                 comboKeyboard.Visible = false;
             }
 
+            var omenLightingSvc = Program.acpi?.GetLightingService();
+            if (omenLightingSvc != null)
+            {
+                comboKeyboard.Visible = false;
+                if (omenLightingSvc.Capabilities.IsPerKey)
+                {
+                    buttonKeyboardColor.Text = "Dynamic Lighting";
+                }
+            }
+
             VisualiseAura();
 
             InitRearLight();
@@ -1278,7 +1314,31 @@ namespace GHelper
         {
             Task.Run(() =>
             {
-                Aura.ApplyAura();
+                var lightingSvc = Program.acpi?.GetLightingService();
+                if (lightingSvc != null && lightingSvc.Capabilities.HasKeyboardLighting)
+                {
+                    var mode = Aura.Mode;
+                    OmenCore.Hardware.OmenLightingEffect effect = OmenCore.Hardware.OmenLightingEffect.Static;
+                    
+                    if (mode == AuraMode.AuraBreathe) effect = OmenCore.Hardware.OmenLightingEffect.Breathing;
+                    else if (mode == AuraMode.AuraColorCycle) effect = OmenCore.Hardware.OmenLightingEffect.ColorCycle;
+                    else if (mode == AuraMode.AuraRainbow) effect = OmenCore.Hardware.OmenLightingEffect.Wave;
+                    else if (mode == AuraMode.AuraStrobe) effect = OmenCore.Hardware.OmenLightingEffect.Strobe;
+
+                    if (effect == OmenCore.Hardware.OmenLightingEffect.Static)
+                    {
+                        lightingSvc.SetKeyboardSolidColor(Aura.Color1);
+                    }
+                    else
+                    {
+                        Color[]? colors = Aura.HasSecondColor() ? new[] { Aura.Color1, Aura.Color2 } : new[] { Aura.Color1 };
+                        lightingSvc.SetKeyboardEffect(effect, 100, 5, colors);
+                    }
+                }
+                else
+                {
+                    Aura.ApplyAura();
+                }
                 VisualiseAura();
             });
         }
@@ -1288,6 +1348,13 @@ namespace GHelper
             pictureColor.BackColor = Aura.Color1;
             pictureColor2.BackColor = Aura.Color2;
             pictureColor2.Visible = Aura.HasSecondColor();
+
+            var omenLightingSvc = Program.acpi?.GetLightingService();
+            if (omenLightingSvc != null && omenLightingSvc.Capabilities.IsPerKey)
+            {
+                pictureColor.Visible = false;
+                pictureColor2.Visible = false;
+            }
 
             if (panelRearLight.Visible) pictureRearColor.BackColor = Aura.RearColor;
 

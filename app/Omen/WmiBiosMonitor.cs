@@ -163,6 +163,11 @@ namespace OmenCore.Hardware
         private System.Diagnostics.PerformanceCounter? _cpuPerfCounter;
         private bool _cpuPerfCounterAvailable = true;
         private static int _workerPrelaunchAttempted;
+
+        // Ryzen SMN Tctl reader — primary CPU temperature source on AMD systems.
+        // Lazily initialized on first use; stays null on Intel systems or when PawnIO/SMU is unavailable.
+        private RyzenTemperatureProvider? _ryzenTempProvider;
+        private bool _ryzenTempProviderInitAttempted;
         
         public bool IsAvailable => _wmiBios.IsAvailable;
 
@@ -355,11 +360,26 @@ namespace OmenCore.Hardware
             
             try
             {
-                // SOURCE 1: ACPI thermal zone — primary CPU temperature.
+                // SOURCE 0: AMD Ryzen SMN Tctl — primary CPU temperature on Ryzen systems.
+                // Reads SMN register 0x59800 directly via PawnIO PCI config space — same method
+                // HP uses internally in AMD17CPU.cs. Bypasses ACPI thermal zones entirely, which
+                // on HP Ryzen laptops are misnamed (CPU zone is "TSZ0", not CPU-like) and report
+                // skin/ambient temps instead of the actual CPU package.
+                //
+                // On Intel systems or when PawnIO is not installed, this returns null and falls
+                // through to SOURCE 1 (ACPI) and SOURCE 2 (HP WMI BIOS) below.
+                bool cpuTempProvidedByRyzenSmn = false;
+                var ryzenTemp = GetRyzenCpuTemperature();
+                if (ryzenTemp.HasValue && ryzenTemp.Value > 0)
+                {
+                    cpuTempProvidedByRyzenSmn = ApplyCpuTemperature(ryzenTemp.Value, "Ryzen SMN Tctl");
+                }
+
+                // SOURCE 1: ACPI thermal zone — primary CPU temperature (non-Ryzen fallback).
                 // Same source as:
                 // Get-CimInstance -Namespace root\wmi -ClassName MSAcpi_ThermalZoneTemperature
                 bool cpuTempProvidedByAcpi = false;
-                if (_acpiThermalAvailable)
+                if (!cpuTempProvidedByRyzenSmn && _acpiThermalAvailable)
                 {
                     double acpiCpuTemp = GetAcpiCpuTemperature();
                     cpuTempProvidedByAcpi = ApplyCpuTemperature(acpiCpuTemp, "ACPI");
@@ -383,7 +403,7 @@ namespace OmenCore.Hardware
                             ? IdleConsecutiveIdenticalTempReads
                             : MaxConsecutiveIdenticalTempReads;
 
-                        if (!cpuTempProvidedByAcpi)
+                        if (!cpuTempProvidedByRyzenSmn && !cpuTempProvidedByAcpi)
                         {
                             ApplyCpuTemperature(cpuTemp, "HP WMI BIOS", cpuFreezeThreshold);
                         }
@@ -1868,6 +1888,59 @@ namespace OmenCore.Hardware
             double tempC = AcpiThermalZoneTemperatureReader.ReadCpuTemperature(ref _cpuThermalZoneInstance);
             return tempC;
         }
+
+        /// <summary>
+        /// Get CPU temperature directly from the AMD Ryzen SMN Tctl register (0x59800).
+        ///
+        /// This is the primary CPU temperature source on AMD Ryzen systems. It bypasses ACPI
+        /// thermal zones (which on HP Ryzen laptops are misnamed — CPU zone is "TSZ0", not
+        /// CPU-like — and report skin/ambient temps) and HP WMI BIOS (which returns integer-only
+        /// values and can freeze).
+        ///
+        /// Same method HP uses internally in HP.Omen.Core.Common (AMD17CPU.Update()) and the
+        /// same method LibreHardwareMonitor uses for all Zen CPU sensors.
+        ///
+        /// Returns 0.0 when unavailable — caller should fall through to ACPI/WMI BIOS.
+        /// </summary>
+        private double? GetRyzenCpuTemperature()
+        {
+            // Lazy-init the provider on first call. We do this here rather than in the constructor
+            // because RyzenSmu.Initialize() loads PawnIO and we don't want to pay that cost on
+            // systems where it isn't installed, or before the monitor is actually used.
+            if (!_ryzenTempProviderInitAttempted)
+            {
+                _ryzenTempProviderInitAttempted = true;
+                try
+                {
+                    if (RyzenControl.IsAmd())
+                    {
+                        var smu = new RyzenSmu();
+                        if (smu.Initialize() && smu.IsAvailable)
+                        {
+                            _ryzenTempProvider = new RyzenTemperatureProvider(smu, _logging);
+                            _logging?.Info($"[WmiBiosMonitor] ✓ Ryzen SMN Tctl provider initialized — primary CPU temperature source");
+                        }
+                        else
+                        {
+                            _logging?.Info($"[WmiBiosMonitor] Ryzen SMN Tctl provider not available (SMU init failed or PawnIO not installed) — will fall back to ACPI/WMI BIOS for CPU temp");
+                        }
+                    }
+                    else
+                    {
+                        _logging?.Info("[WmiBiosMonitor] Intel CPU detected — Ryzen SMN Tctl provider not initialized");
+                    }
+                }
+                catch (Exception ex)
+                {
+                    _logging?.Warn($"[WmiBiosMonitor] Ryzen SMN Tctl provider init failed: {ex.GetType().Name}: {ex.Message}");
+                }
+            }
+
+            if (_ryzenTempProvider == null || !_ryzenTempProvider.IsAvailable)
+                return null;
+
+            return _ryzenTempProvider.ReadPackageTemperatureC();
+        }
         
         /// <summary>
         /// Get CPU current clock speed in MHz via WMI Win32_Processor.
@@ -1901,6 +1974,8 @@ namespace OmenCore.Hardware
             _wmiBios.Dispose();
             _cpuPerfCounter?.Dispose();
             _tempFallbackMonitor?.Dispose();
+            // RyzenTemperatureProvider implements IDisposable and disposes its underlying RyzenSmu.
+            try { _ryzenTempProvider?.Dispose(); } catch { }
             foreach (var counter in _gpuEngineCounters.Values)
             {
                 counter.Dispose();

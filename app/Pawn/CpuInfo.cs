@@ -10,6 +10,8 @@ namespace PawnIO
 
         private static bool DetectAMD()
         {
+            // (debug override removed)
+
             if (!X86Base.IsSupported) return false;
             var (_, ebx, ecx, edx) = X86Base.CpuId(0, 0);
 

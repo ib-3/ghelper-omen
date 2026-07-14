@@ -402,7 +402,7 @@ public static class AppConfig
     // G14 2020 has no aura, but media keys instead
     public static bool NoAura()
     {
-        return IsOmen() || (ContainsModel("GA401I") && !ContainsModel("GA401IHR")) || ContainsModel("GA502IU") || ContainsModel("HN7306") || ContainsModel("M6500X");
+        return (ContainsModel("GA401I") && !ContainsModel("GA401IHR")) || ContainsModel("GA502IU") || ContainsModel("HN7306") || ContainsModel("M6500X");
     }
 
     public static bool MediaKeys()
@@ -670,12 +670,12 @@ public static class AppConfig
     // 2024 Models support Dynamic Lighting
     public static bool IsDynamicLighting()
     {
-        return IsOmen() || IsSlash() || IsIntelHX() || IsTUF() || IsZ13() || IsDynamicLightingOnly() || Is("dynamic_lighting");
+        return IsSlash() || IsIntelHX() || IsTUF() || IsZ13() || IsDynamicLightingOnly() || Is("dynamic_lighting");
     }
 
     public static bool IsDynamicLightingOnly()
     {
-        return IsOmen() || ContainsModel("S560") || ContainsModel("M540") || ContainsModel("UX760") || Is("dynamic_lighting_only");
+        return ContainsModel("S560") || ContainsModel("M540") || ContainsModel("UX760") || Is("dynamic_lighting_only");
     }
 
     public static bool IsDynamicLightingInit()

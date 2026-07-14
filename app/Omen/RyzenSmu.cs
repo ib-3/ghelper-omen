@@ -271,6 +271,32 @@ namespace OmenCore.Hardware
         }
 
         /// <summary>
+        /// Read an arbitrary SMN (System Management Network) register via PCI config space.
+        /// Same mechanism HP uses in AMD17CPU.cs to read Tctl from SMN 0x59800.
+        /// </summary>
+        public bool ReadSmnRegister(uint smnAddress, out uint data)
+        {
+            data = 0;
+            if (!IsAvailable) return false;
+            lock (_smuMutex)
+            {
+                return SmuReadReg(smnAddress, ref data);
+            }
+        }
+
+        /// <summary>
+        /// Write an arbitrary SMN register via PCI config space.
+        /// </summary>
+        public bool WriteSmnRegister(uint smnAddress, uint value)
+        {
+            if (!IsAvailable) return false;
+            lock (_smuMutex)
+            {
+                return SmuWriteReg(smnAddress, value);
+            }
+        }
+
+        /// <summary>
         /// Write to PCI configuration space using PawnIO.
         /// </summary>
         private bool WritePciConfigDword(uint pciAddr, uint regAddr, uint value)

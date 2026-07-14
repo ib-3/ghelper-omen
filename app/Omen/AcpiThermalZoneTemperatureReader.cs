@@ -83,28 +83,44 @@ namespace OmenCore.Hardware
         /// IMPORTANT: On HP Omen laptops, this WMI class exposes multiple thermal zones
         /// including chassis/skin zones (e.g. ~39°C) that are NOT the CPU package.
         /// We must filter by instance name to avoid reading the wrong zone.
-        /// If no CPU-like zone is found, return 0 to fall through to the ACPI/WMI BIOS path.
+        /// If no CPU-like zone is found, fall back to the hottest valid zone
+        /// (CPU is always the hottest active thermal zone on a running laptop).
         /// </summary>
         private static double ReadViaPerfCounter()
         {
             try
             {
                 // Include Name so we can filter out non-CPU thermal zones.
-                // On HP Omen, the first zone returned is often a skin/chassis sensor (~39°C),
+                // On HP Omen/Victus, the first zone returned is often a skin/chassis sensor (~20°C),
                 // not the CPU package. Without filtering, this causes a permanently wrong readout.
+                //
+                // HP Ryzen-specific note: the CPU package zone is typically named "TSZ0" on
+                // HP Victus/Omen Ryzen laptops (confirmed on Ryzen 5 7640HS, BIOS F.31).
+                // "TSZ0" does NOT match any of the IsCpuLikeInstance() patterns, so without the
+                // highest-temp fallback below, Ryzen CPU temp would be reported as 0 or as the
+                // ambient zone's 20°C.
                 using var searcher = new ManagementObjectSearcher(
                     @"root\CIMV2",
-                    "SELECT Name, Temperature FROM Win32_PerfFormattedData_Counters_ThermalZoneInformation");
+                    "SELECT Name, Temperature, HighPrecisionTemperature FROM Win32_PerfFormattedData_Counters_ThermalZoneInformation");
 
                 double bestTemp = 0;
+                double bestNonCpuLikeTemp = 0; // fallback: hottest valid zone
                 bool foundCpuLikeZone = false;
 
                 foreach (ManagementObject obj in searcher.Get())
                 {
-                    if (obj["Temperature"] is not uint kelvin || kelvin == 0)
-                        continue;
+                    // Prefer HighPrecisionTemperature (tenths of Kelvin) when available;
+                    // the integer "Temperature" field loses precision and can round 52°C down to 50°C.
+                    double tempC = 0;
+                    if (obj["HighPrecisionTemperature"] is uint hpTemp && hpTemp > 0)
+                    {
+                        tempC = Math.Round((hpTemp / 10.0) - 273.15, 1);
+                    }
+                    else if (obj["Temperature"] is uint kelvin && kelvin > 0)
+                    {
+                        tempC = Math.Round(kelvin - 273.15, 1);
+                    }
 
-                    double tempC = Math.Round(kelvin - 273.15, 1);
                     var instanceName = obj["Name"]?.ToString() ?? string.Empty;
                     bool isCpuLike = IsCpuLikeInstance(instanceName);
 
@@ -123,16 +139,32 @@ namespace OmenCore.Hardware
                             foundCpuLikeZone = true;
                         }
                     }
-                    else if (!foundCpuLikeZone && bestTemp == 0)
+                    else
                     {
-                        // Keep as tentative fallback only if we never find a CPU-like zone
-                        bestTemp = tempC;
+                        // Track the hottest valid non-CPU-like zone as a fallback.
+                        // On HP Ryzen systems where the CPU zone is named "TSZ0" (not CPU-like),
+                        // this is what actually returns the real CPU temperature — the CPU is
+                        // always the hottest active thermal zone on a running laptop.
+                        if (tempC > bestNonCpuLikeTemp)
+                        {
+                            bestNonCpuLikeTemp = tempC;
+                        }
                     }
                 }
 
-                // Only accept the result if a CPU-like zone was found.
-                // If only generic/ambient zones exist, return 0 to let the ACPI WMI path try.
-                return foundCpuLikeZone ? bestTemp : 0;
+                if (foundCpuLikeZone)
+                    return bestTemp;
+
+                // No CPU-named zone found (common on HP Ryzen). Use the hottest valid zone
+                // as the CPU temp — the CPU is always hotter than ambient/skin sensors.
+                // Log it so we can see which zone we're attributing to the CPU.
+                if (bestNonCpuLikeTemp > 0)
+                {
+                    global::Logger.WriteLine($"[AcpiReader] No CPU-named zone found — using hottest valid zone ({bestNonCpuLikeTemp}°C) as CPU temp (HP Ryzen fallback)");
+                    return bestNonCpuLikeTemp;
+                }
+
+                return 0;
             }
             catch (Exception ex)
             {
@@ -155,7 +187,10 @@ namespace OmenCore.Hardware
                     @"root\wmi",
                     "SELECT CurrentTemperature, InstanceName FROM MSAcpi_ThermalZoneTemperature");
 
-                double bestTemp = 0;
+                double bestCpuLikeTemp = 0;
+                string? bestCpuLikeInstance = null;
+                double bestNonCpuLikeTemp = 0; // fallback: hottest valid zone
+                string? bestNonCpuLikeInstance = null;
 
                 foreach (ManagementObject obj in searcher.Get())
                 {
@@ -180,27 +215,52 @@ namespace OmenCore.Hardware
                         continue;
                     }
 
-                    if (preferredInstanceName == null)
+                    // If we already have a preferred instance (from a previous call), trust it
+                    // as long as it's still reporting valid data.
+                    if (preferredInstanceName != null && instanceName == preferredInstanceName)
                     {
-                        bestTemp = tempC;
-                        preferredInstanceName = instanceName;
+                        bestCpuLikeTemp = tempC;
+                        bestCpuLikeInstance = instanceName;
+                        // Keep scanning in case a CPU-like zone shows up with higher confidence,
+                        // but a sticky preferredInstance is a strong signal.
                     }
-                    else if (instanceName == preferredInstanceName)
+
+                    if (isCpuLike)
                     {
-                        bestTemp = tempC;
+                        if (tempC > bestCpuLikeTemp)
+                        {
+                            bestCpuLikeTemp = tempC;
+                            bestCpuLikeInstance = instanceName;
+                        }
                     }
-                    else if (IsCpuLikeInstance(instanceName))
+                    else
                     {
-                        bestTemp = tempC;
-                        preferredInstanceName = instanceName;
-                    }
-                    else if (bestTemp == 0)
-                    {
-                        bestTemp = tempC;
+                        // Track the hottest valid non-CPU-like zone.
+                        // On HP Ryzen laptops the CPU zone is named "TSZ0" (not CPU-like), so this
+                        // branch is what actually captures the real CPU temp. The CPU is always
+                        // hotter than ambient/skin sensors on a running laptop.
+                        if (tempC > bestNonCpuLikeTemp)
+                        {
+                            bestNonCpuLikeTemp = tempC;
+                            bestNonCpuLikeInstance = instanceName;
+                        }
                     }
                 }
 
-                return bestTemp;
+                if (bestCpuLikeTemp > 0)
+                {
+                    preferredInstanceName = bestCpuLikeInstance;
+                    return bestCpuLikeTemp;
+                }
+
+                if (bestNonCpuLikeTemp > 0)
+                {
+                    global::Logger.WriteLine($"[AcpiReader] No CPU-named ACPI zone found — using hottest valid zone '{bestNonCpuLikeInstance}' ({bestNonCpuLikeTemp}°C) as CPU temp (HP Ryzen fallback)");
+                    preferredInstanceName = bestNonCpuLikeInstance;
+                    return bestNonCpuLikeTemp;
+                }
+
+                return 0;
             }
             catch (Exception ex)
             {

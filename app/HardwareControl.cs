@@ -476,54 +476,116 @@ public static class HardwareControl
         string source = "OmenBackend.DeviceGet(Temp_CPU)";
 
         // 2. Last-resort fallback: dynamic Performance Counter discovery.
-        //    Only used when the primary WMI path returns nothing valid.
-        //    NOTE: Performance Counters on HP Omen often report a generic/ambient zone
-        //    rather than the actual CPU package, so this is intentionally a fallback only.
+        //    IMPORTANT: On HP OMEN/Victus laptops, the ACPI thermal zones exposed via
+        //    Win32_PerfFormattedData_Counters_ThermalZoneInformation are almost never
+        //    named with CPU-like identifiers. On HP Ryzen systems (e.g. Ryzen 5 7640HS,
+        //    Victus 16-s0xxx, BIOS F.31), the CPU package zone is named "TSZ0" while
+        //    "TSZ2" is a skin/ambient sensor reporting a constant ~20°C. The previous
+        //    code's CPU-name filter (CPU/CPUZ/TZ00/PROC/Core/Package) does NOT match
+        //    "TSZ0", so we need a fallback: pick the hottest valid zone, since the CPU
+        //    is always the hottest active thermal zone on a running laptop.
         if (cpuTemp == null || cpuTemp <= 0) try
         {
-            if (_cpuTempCounter == null)
+            // Enumerate all thermal zones once, then pick the best candidate.
+            // We don't cache the PerformanceCounter instance because the best zone
+            // may change between calls (e.g. right after boot TSZ0 might read 0).
+            double bestCpuLikeTemp = -1;
+            string? bestCpuLikeInstance = null;
+            double bestNonCpuLikeTemp = -1;
+            string? bestNonCpuLikeInstance = null;
+            bool anyZoneFound = false;
+
+            try
             {
-                string instanceName = @"\_TZ.THRM"; // default fallback
-                try
+                var category = new PerformanceCounterCategory("Thermal Zone Information");
+                string[] instances = category.GetInstanceNames();
+                Logger.WriteLine($"[GetCPUTemp] PerfCounter instances found: [{string.Join(", ", instances)}]");
+
+                foreach (string inst in instances)
                 {
-                    var category = new PerformanceCounterCategory("Thermal Zone Information");
-                    string[] instances = category.GetInstanceNames();
-                    Logger.WriteLine($"[GetCPUTemp] PerfCounter instances found: [{string.Join(", ", instances)}]");
-                    if (instances.Length > 0)
+                    try
                     {
-                        // Prefer instances containing "THRM", "TZ", or "CPU"
-                        string? bestInstance = null;
-                        foreach (string inst in instances)
+                        using var pc = new PerformanceCounter("Thermal Zone Information", "Temperature", inst, true);
+                        float rawKelvin = pc.NextValue();
+                        if (rawKelvin <= 0) continue; // dead/uninitialized zone
+
+                        float candidate = rawKelvin - 273;
+                        bool isCpuLike = inst.Contains("CPU", StringComparison.OrdinalIgnoreCase) ||
+                                         inst.Contains("CPUZ", StringComparison.OrdinalIgnoreCase) ||
+                                         inst.Contains("TZ00", StringComparison.OrdinalIgnoreCase) ||
+                                         inst.Contains("PROC", StringComparison.OrdinalIgnoreCase) ||
+                                         inst.Contains("Core", StringComparison.OrdinalIgnoreCase) ||
+                                         inst.Contains("Package", StringComparison.OrdinalIgnoreCase);
+
+                        Logger.WriteLine($"[GetCPUTemp] PerfCounter zone '{inst}': {candidate}°C (CpuLike={isCpuLike})");
+                        anyZoneFound = true;
+
+                        // Plausibility sanity check: real CPU package temp on a running laptop
+                        // is essentially always >= 25°C (idle Ryzen mobile sits around 35-50°C,
+                        // Intel mobile around 30-45°C). A reading of exactly 20°C or below is
+                        // either an uninitialized sensor, an ambient zone, or a sentinel value
+                        // from ACPI — never the real CPU temp.
+                        if (candidate < 25 || candidate >= 110)
                         {
-                            if (inst.Contains("THRM", StringComparison.OrdinalIgnoreCase) ||
-                                inst.Contains("TZ", StringComparison.OrdinalIgnoreCase) ||
-                                inst.Contains("CPU", StringComparison.OrdinalIgnoreCase))
+                            Logger.WriteLine($"[GetCPUTemp]   → rejected: out of plausible CPU range [25, 110]");
+                            continue;
+                        }
+
+                        if (isCpuLike)
+                        {
+                            if (candidate > bestCpuLikeTemp)
                             {
-                                bestInstance = inst;
-                                break;
+                                bestCpuLikeTemp = candidate;
+                                bestCpuLikeInstance = inst;
                             }
                         }
-                        instanceName = bestInstance ?? instances[0];
+                        else
+                        {
+                            // Track hottest non-CPU-like zone — on HP Ryzen systems the CPU zone
+                            // is named "TSZ0" which doesn't match the CPU-like filter, so this
+                            // branch is what actually captures the real CPU temperature.
+                            if (candidate > bestNonCpuLikeTemp)
+                            {
+                                bestNonCpuLikeTemp = candidate;
+                                bestNonCpuLikeInstance = inst;
+                            }
+                        }
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.WriteLine($"[GetCPUTemp] PerfCounter read failed for '{inst}': {ex.Message}");
                     }
                 }
-                catch (Exception ex)
-                {
-                    Logger.WriteLine("Failed to dynamically find Thermal Zone instances: " + ex.Message);
-                }
-
-                _cpuTempCounter = new PerformanceCounter("Thermal Zone Information", "Temperature", instanceName, true);
-                Logger.WriteLine($"[GetCPUTemp] PerfCounter using instance: '{instanceName}'");
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLine("Failed to enumerate Thermal Zone instances: " + ex.Message);
             }
 
-            cpuTemp = _cpuTempCounter.NextValue() - 273;
-            source = $"PerfCounter(fallback)";
+            // Prefer a CPU-named zone if we found one. Otherwise fall back to the hottest
+            // valid zone — the CPU is always hotter than ambient/skin sensors on a running laptop.
+            if (bestCpuLikeTemp > 0)
+            {
+                cpuTemp = (float)bestCpuLikeTemp;
+                source = $"PerfCounter(CPU-like '{bestCpuLikeInstance}')";
+            }
+            else if (bestNonCpuLikeTemp > 0)
+            {
+                cpuTemp = (float)bestNonCpuLikeTemp;
+                source = $"PerfCounter(hottest '{bestNonCpuLikeInstance}' — HP Ryzen fallback)";
+                Logger.WriteLine($"[GetCPUTemp] No CPU-named zone found — using hottest valid zone '{bestNonCpuLikeInstance}' ({bestNonCpuLikeTemp}°C) as CPU temp");
+            }
+            else if (anyZoneFound)
+            {
+                Logger.WriteLine("[GetCPUTemp] All PerfCounter zones reported invalid/out-of-range temperatures — no CPU temp available.");
+            }
         }
         catch (Exception)
         {
             //Debug.WriteLine("Failed reading CPU temp via Performance Counter: " + ex.Message);
         }
 
-        Logger.WriteLine($"[GetCPUTemp] RESULT: {cpuTemp}°C via {source}");
+        Logger.WriteLine($"[GetCPUTemp] RESULT: {(cpuTemp.HasValue ? $"{cpuTemp}°C" : "null")} via {source}");
         return cpuTemp;
     }
 

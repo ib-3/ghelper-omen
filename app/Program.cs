@@ -88,6 +88,10 @@ namespace GHelper
             Logger.WriteLine("----------------------");
             Logger.WriteLine("App launched: " + AppConfig.GetModel() + " :" + Assembly.GetExecutingAssembly().GetName().Version.ToString() + CultureInfo.CurrentUICulture + (ProcessHelper.IsUserAdministrator() ? "." : ""));
 
+            // One-time startup checks: warn if not running as admin, or if PawnIO is not installed.
+            // Both checks are dismissed after first show so they don't nag on every launch.
+            StartupChecks.Run();
+
             settingsForm = new SettingsForm();
             modeControl = new ModeControl();
             gpuControl = new GPUModeControl(settingsForm);

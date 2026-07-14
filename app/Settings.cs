@@ -1181,7 +1181,7 @@ namespace GHelper
 
                     try
                     {
-                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ms-settings:personalization-dynamiclighting") { UseShellExecute = true });
+                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ms-settings:personalization-lighting") { UseShellExecute = true });
                     }
                     catch (Exception ex)
                     {

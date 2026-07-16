@@ -1120,7 +1120,8 @@ namespace OmenCore.Hardware
             WithNumPad = 0x01,  // Standard layout with numerical block
             TenKeyLess = 0x02,  // Extra navigation keys but no numerical block (most OMEN laptops)
             PerKeyRgb = 0x03,   // Per-key RGB (not supported for zone control)
-            TenKeyLessPerKeyRgb = 0x06 // Transcend 14 Per-Key RGB
+            TenKeyLessPerKeyRgb = 0x06, // Transcend 14 Per-Key RGB
+            Unknown = 0xFF      // Unknown type
         }
         
         /// <summary>
@@ -1351,8 +1352,7 @@ namespace OmenCore.Hardware
         /// Zone 3 (WASD):        W/A/S/D keys
         /// </summary>
         /// <param name="zoneColors">12-byte array: [R0,G0,B0,R1,G1,B1,R2,G2,B2,R3,G3,B3]</param>
-        /// <param name="ensureBacklightOn">If true, ensures backlight is enabled first</param>
-        public bool SetColorTable(byte[] zoneColors, bool ensureBacklightOn = true)
+        public bool SetColorTable(byte[] zoneColors)
         {
             if (!_isAvailable)
             {
@@ -1362,26 +1362,19 @@ namespace OmenCore.Hardware
 
             try
             {
-                // Ensure backlight is on first (OmenMon behavior)
-                if (ensureBacklightOn)
-                {
-                    _logging?.Info("SetColorTable: Ensuring backlight is ON before setting colors...");
-                    SetBacklight(true);
-                    System.Threading.Thread.Sleep(50); // Brief delay for hardware
-                }
+                // Build exact 37-byte ColorTable structure per OmenMon format
+                // OmenMon structs pack to exactly 37 bytes: 1 byte (zone count) + 24 bytes (padding) + 12 bytes (4 zones)
+                var data = new byte[37];
                 
-                // Build proper 128-byte ColorTable structure per OmenMon format
-                var data = new byte[128];
-                
-                // Byte 0: Zone count
-                data[0] = (byte)(zoneColors.Length / 3);
+                // Byte 0: Zone count (max index: 3 for 4 zones, matching OmenMon)
+                data[0] = 3;
                 
                 // Bytes 1-24: Padding (leave as zeros)
                 const int COLOR_TABLE_PAD = 24;
                 
-                // Bytes 25+: Zone colors (RGB per zone)
+                // Bytes 25-36: Zone colors (RGB per zone)
                 int colorOffset = 1 + COLOR_TABLE_PAD; // Byte 25
-                int colorsToCopy = Math.Min(zoneColors.Length, 128 - colorOffset);
+                int colorsToCopy = Math.Min(zoneColors.Length, 12);
                 Array.Copy(zoneColors, 0, data, colorOffset, colorsToCopy);
                 
                 _logging?.Info($"SetColorTable: ZoneCount={data[0]}, copied {colorsToCopy} bytes at offset {colorOffset}");
@@ -1389,7 +1382,7 @@ namespace OmenCore.Hardware
                 var result = SendBiosCommand(BiosCmd.Keyboard, CMD_COLOR_SET, data, 0);
                 if (result != null)
                 {
-                    _logging?.Info($"✓ Keyboard color table set (128-byte OmenMon format, {data[0]} zones)");
+                    _logging?.Info($"✓ Keyboard color table set (37-byte OmenMon format, {data[0]} zones)");
                     return true;
                 }
                 else
@@ -1429,7 +1422,7 @@ namespace OmenCore.Hardware
                 var currentColors = GetColorTable();
                 
                 var data = new byte[128];
-                data[0] = 4; // Zone count
+                data[0] = 3; // Max zone index (0-3 for 4 zones, matching OmenMon)
                 
                 const int COLOR_TABLE_PAD = 24;
                 int colorOffset = 1 + COLOR_TABLE_PAD; // Byte 25

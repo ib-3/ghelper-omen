@@ -68,6 +68,13 @@ namespace OmenCore.Hardware
             {
                 return false;
             }
+
+            bool isDesktop = (CpuName.EndsWith("X", StringComparison.OrdinalIgnoreCase) || 
+                              CpuName.EndsWith("X3D", StringComparison.OrdinalIgnoreCase) || 
+                              CpuName.EndsWith("G", StringComparison.OrdinalIgnoreCase)) && 
+                             !CpuName.Contains("HX", StringComparison.OrdinalIgnoreCase);
+
+            if (isDesktop) return false;
             
             // Supported: Ryzen AI MAX, Ryzen AI 9, Ryzen 9 HX, Ryzen 8000/7000/6000/4000 H-series
             return CpuName.Contains("RYZEN AI MAX", StringComparison.OrdinalIgnoreCase) ||
@@ -99,6 +106,13 @@ namespace OmenCore.Hardware
         public static bool SupportsIgpuUndervolt()
         {
             if (!_initialized) Init();
+
+            bool isDesktop = (CpuName.EndsWith("X", StringComparison.OrdinalIgnoreCase) || 
+                              CpuName.EndsWith("X3D", StringComparison.OrdinalIgnoreCase) || 
+                              CpuName.EndsWith("G", StringComparison.OrdinalIgnoreCase)) && 
+                             !CpuName.Contains("HX", StringComparison.OrdinalIgnoreCase);
+
+            if (isDesktop) return false;
             
             return CpuName.Contains("RYZEN AI MAX", StringComparison.OrdinalIgnoreCase) ||
                    CpuName.Contains("6900H", StringComparison.OrdinalIgnoreCase) ||

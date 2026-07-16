@@ -37,7 +37,8 @@ namespace GHelper
         FanSensorControl fanSensorControl;
 
         static int gpuPowerBase = 0;
-        static bool isGPUPower => gpuPowerBase > 0;
+        public static bool IsSmiPowerLimit { get; private set; } = false;
+        static bool isGPUPower => gpuPowerBase > 0 || IsSmiPowerLimit;
         static bool clampFanDots = AppConfig.IsClampFanDots();
 
         public Fans()
@@ -141,7 +142,7 @@ namespace GHelper
             trackSlow.KeyUp += TrackPower_KeyUp;
 
             checkApplyFans.Click += CheckApplyFans_Click;
-            buttonApplyPower.Click += ButtonApplyPower_Click;
+            checkApplyPower.Click += CheckApplyPower_Click;
 
             trackGPUClockLimit.Minimum = NvidiaGpuControl.MinClockLimit;
             trackGPUClockLimit.Maximum = NvidiaGpuControl.MaxClockLimit;
@@ -303,6 +304,7 @@ namespace GHelper
             InitFans();
             InitPower();
             InitPowerPlan();
+            checkApplyPower.Checked = AppConfig.IsApplyPower();
             InitUV();
             InitGPU();
         }
@@ -399,7 +401,7 @@ namespace GHelper
 
             VisualiseAdvanced();
 
-            buttonAdvanced.Visible = CpuInfo.IsAMD;
+            buttonAdvanced.Visible = false; // CpuInfo.IsAMD;
 
         }
 
@@ -533,6 +535,25 @@ namespace GHelper
             gpuPowerBase = Program.acpi.DeviceGet(AsusACPI.GPU_BASE);
             if (gpuPowerBase >= 0) Logger.WriteLine($"ReadGPUPowerBase: {gpuPowerBase}");
 
+            var smiLimits = NvidiaSmi.GetPowerLimits();
+            if (smiLimits.HasValue && gpuPowerBase <= 0)
+            {
+                IsSmiPowerLimit = true;
+                panelGPUPower.Visible = true;
+                
+                AsusACPI.MinGPUPower = smiLimits.Value.Minimum;
+                AsusACPI.MaxGPUPower = smiLimits.Value.Maximum;
+                trackGPUPower.Minimum = smiLimits.Value.Minimum;
+                trackGPUPower.Maximum = smiLimits.Value.Maximum;
+                
+                int gpu_power_smi = AppConfig.GetMode("gpu_power");
+                if (gpu_power_smi < 0) gpu_power_smi = smiLimits.Value.Current;
+                
+                trackGPUPower.Value = Math.Max(Math.Min(gpu_power_smi, smiLimits.Value.Maximum), smiLimits.Value.Minimum);
+                VisualiseGPUSettings();
+                return;
+            }
+
             panelGPUPower.Visible = isGPUPower;
             if (!isGPUPower) return;
 
@@ -660,7 +681,8 @@ namespace GHelper
             else
                 labelGPUClockLimit.Text = $"{trackGPUClockLimit.Value} MHz";
 
-            labelGPUPower.Text = (gpuPowerBase + trackGPUPower.Value) + "W";
+            int displayPower = IsSmiPowerLimit ? trackGPUPower.Value : (gpuPowerBase + trackGPUPower.Value);
+            labelGPUPower.Text = displayPower + "W";
 
         }
 
@@ -961,13 +983,21 @@ namespace GHelper
             AppConfig.SetMode("auto_boost", comboBoost.SelectedIndex);
         }
 
-        private void ButtonApplyPower_Click(object? sender, EventArgs e)
+        private void CheckApplyPower_Click(object? sender, EventArgs e)
         {
-            Task.Run(() =>
+            if (sender is null) return;
+            CheckBox chk = (CheckBox)sender;
+
+            AppConfig.SetMode("auto_apply_power", chk.Checked ? 1 : 0);
+
+            if (chk.Checked)
             {
-                modeControl.SetPower(launchAsAdmin: true);
-                UpdatePowerLimitsVerification();
-            });
+                Task.Run(() =>
+                {
+                    modeControl.SetPower(launchAsAdmin: true);
+                    UpdatePowerLimitsVerification();
+                });
+            }
         }
 
         private void CheckApplyFans_Click(object? sender, EventArgs e)
@@ -1023,7 +1053,7 @@ namespace GHelper
         }
         public void InitPower()
         {
-            bool hasControl = Program.acpi.IsSupported(AsusACPI.PPT_APUA0);
+            bool hasControl = Program.acpi.IsSupported(AsusACPI.PPT_APUA0) || PawnIO.CpuInfo.IsAMD;
 
             panelTotal.Visible = hasControl;
             panelApplyPower.Visible = hasControl; // prikazi apply btn
@@ -1058,12 +1088,20 @@ namespace GHelper
             }
 
             // forsiraj auto primjenu
-            AppConfig.SetMode("auto_apply_power", 1);
+            // AppConfig.SetMode("auto_apply_power", 1);
 
-            int limit_total = AppConfig.GetMode("limit_total", AsusACPI.DefaultTotal);
+            int mode = Modes.GetCurrentBase();
+            int defaultLimit = mode switch
+            {
+                AsusACPI.PerformanceSilent => Program.acpi.IsOmen() ? 65 : 20,
+                AsusACPI.PerformanceTurbo => Program.acpi.IsOmen() ? 130 : 80,
+                _ => Program.acpi.IsOmen() ? 90 : 40
+            };
+
+            int limit_total = AppConfig.GetMode("limit_total", defaultLimit);
             int limit_slow = AppConfig.GetMode("limit_slow", limit_total);
             int limit_fast = AppConfig.GetMode("limit_fast", limit_slow);
-            int limit_cpu = AppConfig.GetMode("limit_cpu", AsusACPI.DefaultCPU);
+            int limit_cpu = AppConfig.GetMode("limit_cpu", defaultLimit);
 
             if (limit_total > AsusACPI.MaxTotal) limit_total = AsusACPI.MaxTotal;
             if (limit_total < AsusACPI.MinTotal) limit_total = AsusACPI.MinTotal;
@@ -1267,11 +1305,12 @@ namespace GHelper
 
             //Debug.WriteLine(BitConverter.ToString(curve));
 
+            int count = curve.Length / 2;
             byte old = 0;
-            for (int i = 0; i < 8; i++)
+            for (int i = 0; i < count; i++)
             {
                 if (curve[i] == old) curve[i]++; // preventing 2 points in same spot from default asus profiles
-                series.Points.AddXY(curve[i], curve[i + 8]);
+                series.Points.AddXY(curve[i], curve[i + count]);
                 old = curve[i];
             }
 
@@ -1281,12 +1320,13 @@ namespace GHelper
 
         void SaveProfile(Series series, AsusFan device)
         {
-            byte[] curve = new byte[16];
+            int count = series.Points.Count;
+            byte[] curve = new byte[count * 2];
             int i = 0;
             foreach (DataPoint point in series.Points)
             {
                 curve[i] = (byte)point.XValue;
-                curve[i + 8] = (byte)point.YValues.First();
+                curve[i + count] = (byte)point.YValues.First();
                 i++;
             }
 
@@ -1315,7 +1355,14 @@ namespace GHelper
             seriesXGM.Color = Color.Gray;
 
             AppConfig.SetMode("auto_apply", 0);
-            AppConfig.SetMode("auto_apply_power", 1); // uvijek on
+            AppConfig.SetMode("auto_apply_power", 0); // off by default
+
+            // Explicitly remove power limits so they reset to defaults
+            AppConfig.RemoveMode("limit_total");
+            AppConfig.RemoveMode("limit_slow");
+            AppConfig.RemoveMode("limit_fast");
+            AppConfig.RemoveMode("limit_cpu");
+            AppConfig.RemoveMode("powermode");
 
             trackUV.Value = CpuInfo.MaxCPUUV;
             trackUViGPU.Value = CpuInfo.MaxIGPUUV;

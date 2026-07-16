@@ -93,7 +93,7 @@ namespace GHelper.Mode
         public static extern uint PowerGetEffectiveOverlayScheme(out Guid EffectiveOverlayGuid);
 
         [DllImportAttribute("powrprof.dll", EntryPoint = "PowerSetActiveOverlayScheme")]
-        public static extern uint PowerSetActiveOverlayScheme(Guid OverlaySchemeGuid);
+        public static extern uint PowerSetActiveOverlayScheme(ref Guid OverlaySchemeGuid);
 
         const string POWER_SILENT = "961cc777-2547-4f9d-8174-7d86181b8a7a";
         const string POWER_BALANCED = "00000000-0000-0000-0000-000000000000";
@@ -347,7 +347,7 @@ namespace GHelper.Mode
 
             if (status != 0 || activeScheme != guidScheme)
             {
-                status = PowerSetActiveOverlayScheme(guidScheme);
+                status = PowerSetActiveOverlayScheme(ref guidScheme);
                 Logger.WriteLine("Power Mode " + activeScheme + " -> " + scheme + ":" + (status == 0 ? "OK" : status));
             }
 

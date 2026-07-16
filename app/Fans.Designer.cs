@@ -102,7 +102,7 @@ namespace GHelper
             panelPawnIO = new Panel();
             panelPower = new Panel();
             panelApplyPower = new Panel();
-            buttonApplyPower = new RButton();
+            checkApplyPower = new RCheckBox();
             panelCPU = new Panel();
             labelCPU = new Label();
             labelLeftCPU = new Label();
@@ -1073,7 +1073,7 @@ namespace GHelper
             // panelApplyPower
             // 
             panelApplyPower.AutoSize = true;
-            panelApplyPower.Controls.Add(buttonApplyPower);
+            panelApplyPower.Controls.Add(checkApplyPower);
             panelApplyPower.Dock = DockStyle.Top;
             panelApplyPower.Location = new Point(0, 804);
             panelApplyPower.Name = "panelApplyPower";
@@ -1081,23 +1081,18 @@ namespace GHelper
             panelApplyPower.Size = new Size(520, 76);
             panelApplyPower.TabIndex = 47;
             // 
-            // buttonApplyPower
+            // checkApplyPower
             // 
-            buttonApplyPower.Activated = false;
-            buttonApplyPower.BackColor = SystemColors.ControlLight;
-            buttonApplyPower.BorderColor = Color.Transparent;
-            buttonApplyPower.BorderRadius = 2;
-            buttonApplyPower.Dock = DockStyle.Top;
-            buttonApplyPower.FlatStyle = FlatStyle.Flat;
-            buttonApplyPower.Location = new Point(15, 15);
-            buttonApplyPower.Margin = new Padding(0);
-            buttonApplyPower.Name = "buttonApplyPower";
-            buttonApplyPower.Secondary = true;
-            buttonApplyPower.Size = new Size(490, 46);
-            buttonApplyPower.TabIndex = 45;
-            buttonApplyPower.Text = "Apply Power Limits";
-            buttonApplyPower.TextImageRelation = TextImageRelation.ImageBeforeText;
-            buttonApplyPower.UseVisualStyleBackColor = false;
+            checkApplyPower.BackColor = SystemColors.ControlLight;
+            checkApplyPower.Dock = DockStyle.Top;
+            checkApplyPower.Location = new Point(15, 15);
+            checkApplyPower.Margin = new Padding(0);
+            checkApplyPower.Name = "checkApplyPower";
+            checkApplyPower.Padding = new Padding(16, 6, 16, 6);
+            checkApplyPower.Size = new Size(490, 46);
+            checkApplyPower.TabIndex = 45;
+            checkApplyPower.Text = "Apply custom power limits";
+            checkApplyPower.UseVisualStyleBackColor = false;
             // 
             // panelCPU
             // 
@@ -2105,7 +2100,7 @@ namespace GHelper
         private Panel panelTitleGPU;
         private PictureBox pictureGPU;
         private Label labelGPU;
-        private RButton buttonApplyPower;
+        private RCheckBox checkApplyPower;
         private Panel panelGPUBoost;
         private Label labelGPUBoost;
         private Label labelGPUBoostTitle;

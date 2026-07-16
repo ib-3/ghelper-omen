@@ -121,6 +121,7 @@ namespace GHelper
             checkNVPlatform = new CheckBox();
             checkStatusLed = new CheckBox();
             checkAspm = new CheckBox();
+            checkOmenMax = new CheckBox();
             checkDonate = new CheckBox();
             panelPower = new Panel();
             numericHibernateAfter = new NumericUpDownWithUnit();
@@ -1204,6 +1205,7 @@ namespace GHelper
             panelSettings.Controls.Add(checkNVPlatform);
             panelSettings.Controls.Add(checkStatusLed);
             panelSettings.Controls.Add(checkAspm);
+            panelSettings.Controls.Add(checkOmenMax);
             panelSettings.Controls.Add(checkDonate);
             panelSettings.Dock = DockStyle.Top;
             panelSettings.Location = new Point(15, 1252);
@@ -1314,6 +1316,19 @@ namespace GHelper
             checkDonate.TabIndex = 3;
             checkDonate.Text = "Show Thank You / Donate Button";
             checkDonate.UseVisualStyleBackColor = true;
+            // 
+            // checkOmenMax
+            // 
+            checkOmenMax.AutoSize = true;
+            checkOmenMax.Dock = DockStyle.Top;
+            checkOmenMax.Location = new Point(21, 242);
+            checkOmenMax.Margin = new Padding(5, 3, 5, 3);
+            checkOmenMax.Name = "checkOmenMax";
+            checkOmenMax.Padding = new Padding(3);
+            checkOmenMax.Size = new Size(917, 42);
+            checkOmenMax.TabIndex = 2;
+            checkOmenMax.Text = "Omen: Replace Turbo with Max Fan Mode (turn off custom curve)";
+            checkOmenMax.UseVisualStyleBackColor = true;
             //
             // checkNVPlatform
             // 
@@ -1813,6 +1828,7 @@ namespace GHelper
         private CheckBox checkUSBC;
         private CheckBox checkGpuApps;
         private CheckBox checkDonate;
+        private CheckBox checkOmenMax;
         private PictureBox pictureBacklight;
         private Label labelBacklightTitle;
         private PictureBox pictureService;

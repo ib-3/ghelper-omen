@@ -1,4 +1,4 @@
-using System;
+using System.Threading;
 using OmenCore.Models;
 
 namespace OmenCore.Hardware
@@ -76,11 +76,20 @@ namespace OmenCore.Hardware
             try
             {
                 _ecAccess.WriteByte(EC_PERFORMANCE_MODE, modeValue);
+                
+                // Allow EC a moment to process the write
+                Thread.Sleep(10);
+                
+                byte readback = _ecAccess.ReadByte(EC_PERFORMANCE_MODE);
+                if (readback != modeValue)
+                {
+                    Logger.WriteLine($"EC write to 0x{EC_PERFORMANCE_MODE:X2} might be write-only/clear-on-read. Wrote 0x{modeValue:X2}, read back 0x{readback:X2}. Assuming success.");
+                }
             }
             catch (UnauthorizedAccessException)
             {
                 throw new InvalidOperationException(
-                    $"EC register 0x{EC_PERFORMANCE_MODE:X} not in safety allowlist. " +
+                    $"EC register 0x{EC_PERFORMANCE_MODE:X2} not in safety allowlist. " +
                     "Add it to the EC write allowlist only after verifying it is correct for your hardware.");
             }
         }

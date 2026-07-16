@@ -416,6 +416,65 @@ namespace PawnIO
             }
         }
 
+        private SmuStatus SetPpt(int watts)
+        {
+            uint mw = (uint)watts * 1000;
+            switch (Family)
+            {
+                case CpuFamily.Raven:    return SendMp1(0x33, mw);
+                case CpuFamily.Renoir:   return SendMp1(0x64, mw);
+                case CpuFamily.Matisse:  return SendMp1(0x53, mw);
+                case CpuFamily.Raphael:  return SendMp1(0x56, mw);
+                default:                 return SmuStatus.Failed;
+            }
+        }
+
+        private SmuStatus SetTdc(int amps)
+        {
+            uint ma = (uint)amps * 1000;
+            switch (Family)
+            {
+                case CpuFamily.Renoir:   return SendMp1(0x65, ma);
+                case CpuFamily.Matisse:  return SendMp1(0x54, ma);
+                case CpuFamily.Raphael:  return SendMp1(0x57, ma);
+                default:                 return SmuStatus.Failed;
+            }
+        }
+
+        private SmuStatus SetEdc(int amps)
+        {
+            uint ma = (uint)amps * 1000;
+            switch (Family)
+            {
+                case CpuFamily.Renoir:   return SendMp1(0x66, ma);
+                case CpuFamily.Matisse:  return SendMp1(0x55, ma);
+                case CpuFamily.Raphael:  return SendMp1(0x58, ma);
+                default:                 return SmuStatus.Failed;
+            }
+        }
+
+        public void SetAdaptiveLimits(int watts, out string log)
+        {
+            int currentAmps = (int)(watts * 1.33f);
+            var sb = new System.Text.StringBuilder();
+
+            SmuStatus stapm = SetStapm(watts);
+            SmuStatus fast  = SetFast(watts);
+            SmuStatus slow  = SetSlow(watts);
+            
+            if (stapm != SmuStatus.Failed || fast != SmuStatus.Failed || slow != SmuStatus.Failed)
+            {
+                sb.Append($"STAPM: {watts}W {stapm} | SLOW: {watts}W {slow} | FAST: {watts}W {fast} | ");
+            }
+
+            SmuStatus ppt = SetPpt(watts);
+            SmuStatus tdc = SetTdc(currentAmps);
+            SmuStatus edc = SetEdc(currentAmps);
+            sb.Append($"PPT: {watts}W {ppt} | TDC: {currentAmps}A {tdc} | EDC: {currentAmps}A {edc}");
+
+            log = sb.ToString();
+        }
+
         private bool ReadReg(uint addr, out uint value)
         {
             value = 0;

@@ -322,6 +322,194 @@ namespace OmenCore.Hardware
         }
 
         /// <summary>
+        /// Set Fast PPT Limit (fPPT) in mW.
+        /// </summary>
+        public RyzenSmu.SmuStatus SetFastPptLimit(uint valueMw)
+        {
+            valueMw = Math.Clamp(valueMw, 15_000u, 54_000u);
+
+            uint[] args = new uint[6];
+            args[0] = valueMw;
+            RyzenSmu.SmuStatus result = RyzenSmu.SmuStatus.Failed;
+
+            switch (_cpuInfo.Family)
+            {
+                case RyzenFamily.Raven:
+                case RyzenFamily.Picasso:
+                case RyzenFamily.Dali:
+                    result = _smu.SendMp1(0x1B, ref args);
+                    break;
+
+                case RyzenFamily.RenoirLucienne:
+                case RyzenFamily.VanGogh:
+                case RyzenFamily.CezanneBarcelo:
+                case RyzenFamily.Rembrandt:
+                case RyzenFamily.Phoenix:
+                case RyzenFamily.Mendocino:
+                case RyzenFamily.HawkPoint:
+                case RyzenFamily.StrixPoint:
+                    result = _smu.SendMp1(0x15, ref args);
+                    break;
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Set Slow PPT Limit (sPPT) in mW.
+        /// </summary>
+        public RyzenSmu.SmuStatus SetSlowPptLimit(uint valueMw)
+        {
+            valueMw = Math.Clamp(valueMw, 15_000u, 54_000u);
+
+            uint[] args = new uint[6];
+            args[0] = valueMw;
+            RyzenSmu.SmuStatus result = RyzenSmu.SmuStatus.Failed;
+
+            switch (_cpuInfo.Family)
+            {
+                case RyzenFamily.Raven:
+                case RyzenFamily.Picasso:
+                case RyzenFamily.Dali:
+                    result = _smu.SendMp1(0x1C, ref args);
+                    break;
+
+                case RyzenFamily.RenoirLucienne:
+                case RyzenFamily.VanGogh:
+                case RyzenFamily.CezanneBarcelo:
+                case RyzenFamily.Rembrandt:
+                case RyzenFamily.Phoenix:
+                case RyzenFamily.Mendocino:
+                case RyzenFamily.HawkPoint:
+                case RyzenFamily.StrixPoint:
+                    result = _smu.SendMp1(0x16, ref args);
+                    break;
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Set Package Power Tracking (PPT) limit in mW.
+        /// </summary>
+        public RyzenSmu.SmuStatus SetPptLimit(uint valueMw)
+        {
+            valueMw = Math.Clamp(valueMw, 15_000u, 300_000u);
+
+            uint[] args = new uint[6];
+            args[0] = valueMw;
+            RyzenSmu.SmuStatus result = RyzenSmu.SmuStatus.Failed;
+
+            switch (_cpuInfo.Family)
+            {
+                case RyzenFamily.Raven:
+                case RyzenFamily.Picasso:
+                case RyzenFamily.Dali:
+                    result = _smu.SendMp1(0x33, ref args);
+                    break;
+
+                case RyzenFamily.RenoirLucienne:
+                case RyzenFamily.CezanneBarcelo:
+                    result = _smu.SendMp1(0x64, ref args);
+                    break;
+
+                case RyzenFamily.VanGogh:
+                case RyzenFamily.Rembrandt:
+                case RyzenFamily.Phoenix:
+                case RyzenFamily.Mendocino:
+                case RyzenFamily.HawkPoint:
+                case RyzenFamily.StrixPoint:
+                case RyzenFamily.Matisse:
+                case RyzenFamily.Vermeer:
+                    result = _smu.SendMp1(0x53, ref args);
+                    break;
+
+                case RyzenFamily.RaphaelDragonRange:
+                case RyzenFamily.FireRange:
+                    result = _smu.SendMp1(0x56, ref args);
+                    break;
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Set Thermal Design Current (TDC) limit in mA.
+        /// </summary>
+        public RyzenSmu.SmuStatus SetTdcLimit(uint valueMa)
+        {
+            valueMa = Math.Clamp(valueMa, 15_000u, 300_000u);
+
+            uint[] args = new uint[6];
+            args[0] = valueMa;
+            RyzenSmu.SmuStatus result = RyzenSmu.SmuStatus.Failed;
+
+            switch (_cpuInfo.Family)
+            {
+                case RyzenFamily.RenoirLucienne:
+                case RyzenFamily.CezanneBarcelo:
+                    result = _smu.SendMp1(0x65, ref args);
+                    break;
+
+                case RyzenFamily.VanGogh:
+                case RyzenFamily.Rembrandt:
+                case RyzenFamily.Phoenix:
+                case RyzenFamily.Mendocino:
+                case RyzenFamily.HawkPoint:
+                case RyzenFamily.StrixPoint:
+                case RyzenFamily.Matisse:
+                case RyzenFamily.Vermeer:
+                    result = _smu.SendMp1(0x54, ref args);
+                    break;
+
+                case RyzenFamily.RaphaelDragonRange:
+                case RyzenFamily.FireRange:
+                    result = _smu.SendMp1(0x57, ref args);
+                    break;
+            }
+
+            return result;
+        }
+
+        /// <summary>
+        /// Set Electrical Design Current (EDC) limit in mA.
+        /// </summary>
+        public RyzenSmu.SmuStatus SetEdcLimit(uint valueMa)
+        {
+            valueMa = Math.Clamp(valueMa, 15_000u, 300_000u);
+
+            uint[] args = new uint[6];
+            args[0] = valueMa;
+            RyzenSmu.SmuStatus result = RyzenSmu.SmuStatus.Failed;
+
+            switch (_cpuInfo.Family)
+            {
+                case RyzenFamily.RenoirLucienne:
+                case RyzenFamily.CezanneBarcelo:
+                    result = _smu.SendMp1(0x66, ref args);
+                    break;
+
+                case RyzenFamily.VanGogh:
+                case RyzenFamily.Rembrandt:
+                case RyzenFamily.Phoenix:
+                case RyzenFamily.Mendocino:
+                case RyzenFamily.HawkPoint:
+                case RyzenFamily.StrixPoint:
+                case RyzenFamily.Matisse:
+                case RyzenFamily.Vermeer:
+                    result = _smu.SendMp1(0x55, ref args);
+                    break;
+
+                case RyzenFamily.RaphaelDragonRange:
+                case RyzenFamily.FireRange:
+                    result = _smu.SendMp1(0x58, ref args);
+                    break;
+            }
+
+            return result;
+        }
+
+        /// <summary>
         /// Set temperature limit in degrees Celsius.
         /// </summary>
         public RyzenSmu.SmuStatus SetTctlTemp(uint tempC)

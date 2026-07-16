@@ -11,7 +11,7 @@ A lightweight, independent alternative to HP Omen Gaming Hub for HP OMEN (and co
 
 Official manufacturer software suites are often heavy, resource-intensive, and rely on multiple background services. G-Helper Omen provides the same powerful tuning capabilities inside a single, lightweight executable that consumes minimal RAM and zero background CPU when idle.
 
-**The WMI Advantage:** With the release of version 0.2.0, G-Helper Omen has completely shifted its primary architecture to use HP's native Windows Management Instrumentation (WMI) interface (`hpqBIOSInt128`) instead of raw Embedded Controller (EC) manipulation. This means:
+**The WMI Advantage:** With the release of versions 0.2.0 through 0.4.0, G-Helper Omen has completely shifted its primary architecture to use HP's native Windows Management Instrumentation (WMI) interface (`hpqBIOSInt128`) instead of raw Embedded Controller (EC) manipulation. This means:
 1. **Official Compatibility:** The app now communicates with your hardware the *exact* same way the official OMEN Gaming Hub does.
 2. **Maximum Safety:** No more fighting with anti-cheat software over unsigned drivers or kernel ring0 access for basic fan speeds.
 3. **Seamless Integration:** WMI respects your laptop's built-in BIOS thermal limits and power envelopes, preventing unexpected thermal throttling or system lockups.
@@ -24,6 +24,7 @@ Official manufacturer software suites are often heavy, resource-intensive, and r
 - **Custom Fan Curves:** Configure per-mode temperature-to-fan-speed curves for both CPU and GPU with real-time WMI RPM feedback.
 - **Graphics (GPU) Management:** Toggle between Eco (iGPU only), Standard (Hybrid), Ultimate (discrete), and Optimized auto-switching modes.
 - **Advanced Power Tuning:** Fine-tune CPU power limits (Intel PL1/PL2 or AMD SPL/sPPT/fPPT) with smart detection.
+- **AMD Ryzen Undervolting:** Support for Ryzen SMU undervolting directly through the PawnIO kernel interface.
 - **Live Power Telemetry:** Real-time CPU package power draw displayed via LibreHardwareMonitor.
 - **Keyboard Backlight Control:** WMI-driven per-zone RGB adjustments and hotkey bindings.
 - **Windows Dynamic Lighting:** Native support for modern OMEN laptops with per-key RGB keyboards via Windows Settings.

@@ -106,6 +106,17 @@ namespace GHelper
 
             var startCount = AppConfig.Get("start_count") + 1;
             AppConfig.Set("start_count", startCount);
+
+            if (AppConfig.Get("omen_fan_curve_reset_v4") == -1)
+            {
+                for (int i = 0; i <= 3; i++)
+                {
+                    AppConfig.Remove($"fan_profile_cpu_{i}");
+                    AppConfig.Remove($"fan_profile_gpu_{i}");
+                    AppConfig.Set($"auto_apply_power_{i}", 0);
+                }
+                AppConfig.Set("omen_fan_curve_reset_v4", 1);
+            }
             Logger.WriteLine("Start Count: " + startCount);
 
             acpi = new AsusACPI();

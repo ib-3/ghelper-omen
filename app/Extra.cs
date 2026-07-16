@@ -241,6 +241,9 @@ namespace GHelper
 
                 panelBacklight.Visible = false;
                 panelBacklightHeader.Visible = false;
+
+                InitOmenGpuMode();
+                InitOmenRgbMethod();
             }
 
             // Change text and hide irrelevant options on the ROG Ally,
@@ -427,13 +430,20 @@ namespace GHelper
             numericBacklightTime.ValueChanged += NumericBacklightTime_ValueChanged;
             numericBacklightPluggedTime.ValueChanged += NumericBacklightTime_ValueChanged;
 
-            checkGpuApps.Checked = AppConfig.Is("kill_gpu_apps");
+            checkGpuApps.Checked = AppConfig.IsKillGpuApps();
             checkGpuApps.CheckedChanged += CheckGpuApps_CheckedChanged;
 
             checkDonate.Checked = !AppConfig.Is("hide_donate_button");
             checkDonate.CheckedChanged += (s, e) =>
             {
                 AppConfig.Set("hide_donate_button", checkDonate.Checked ? 0 : 1);
+            };
+
+            checkOmenMax.Visible = AppConfig.IsOmen();
+            checkOmenMax.Checked = AppConfig.Is("omen_turbo_is_max");
+            checkOmenMax.CheckedChanged += (s, e) =>
+            {
+                AppConfig.Set("omen_turbo_is_max", checkOmenMax.Checked ? 1 : 0);
             };
 
             int bootSound = Program.acpi.DeviceGet(AsusACPI.BootSound);
@@ -481,8 +491,48 @@ namespace GHelper
             InitHibernate();
 
             InitACPITesting();
+            InitUxtuSettings();
 
+        }
 
+        private void InitUxtuSettings()
+        {
+            if (!PawnIO.CpuInfo.IsAMD) return;
+
+            Panel panelUxtu = new Panel();
+            panelUxtu.AccessibleRole = AccessibleRole.Grouping;
+            panelUxtu.AutoSize = true;
+            panelUxtu.AutoSizeMode = AutoSizeMode.GrowAndShrink;
+            panelUxtu.Dock = DockStyle.Top;
+            panelUxtu.Padding = new Padding(21, 5, 11, 5);
+
+            LinkLabel linkUxtu = new LinkLabel();
+            linkUxtu.Text = "For better Ryzen support install UXTU";
+            linkUxtu.AutoSize = true;
+            linkUxtu.Location = new Point(21, 10);
+            linkUxtu.LinkClicked += (s, e) => { Process.Start(new ProcessStartInfo("https://github.com/JamesCJ60/Universal-x86-Tuning-Utility") { UseShellExecute = true }); };
+
+            Button btnCheckUxtu = new Button();
+            btnCheckUxtu.Text = "Installed?";
+            btnCheckUxtu.AutoSize = true;
+            btnCheckUxtu.Location = new Point(250, 5);
+
+            Label lblUxtuStatus = new Label();
+            lblUxtuStatus.Text = OmenCore.Hardware.UxtuDetection.IsInstalled() ? "Done" : "Not Installed";
+            lblUxtuStatus.AutoSize = true;
+            lblUxtuStatus.Location = new Point(330, 10);
+
+            btnCheckUxtu.Click += (s, e) =>
+            {
+                OmenCore.Hardware.UxtuDetection.ClearCache();
+                lblUxtuStatus.Text = OmenCore.Hardware.UxtuDetection.IsInstalled() ? "Done" : "Not Installed";
+            };
+
+            panelUxtu.Controls.Add(linkUxtu);
+            panelUxtu.Controls.Add(btnCheckUxtu);
+            panelUxtu.Controls.Add(lblUxtuStatus);
+
+            panelSettings.Controls.Add(panelUxtu);
         }
 
 
@@ -846,6 +896,120 @@ namespace GHelper
                 ClamshellModeControl.DisableClamshellMode();
             }
 
+        }
+
+        private void InitOmenGpuMode()
+        {
+            if (!Program.acpi.IsOmen()) return;
+
+            int currentMode = Program.acpi.OmenGetGpuMode();
+            Logger.WriteLine($"InitOmenGpuMode: currentMode={currentMode}");
+
+            Panel panelOmenGpuMode = new Panel();
+            panelOmenGpuMode.Width = this.Width; // Set initial width so Anchors work correctly
+            panelOmenGpuMode.Dock = DockStyle.Top;
+            panelOmenGpuMode.Height = 57; // Same as panelAPU
+            panelOmenGpuMode.Padding = new Padding(11, 5, 11, 0);
+
+            Label labelOmenGpuMode = new Label();
+            labelOmenGpuMode.Text = "Hardware GPU Mode (Requires Restart)";
+            labelOmenGpuMode.AutoSize = true;
+            labelOmenGpuMode.Location = new Point(50, 15);
+            labelOmenGpuMode.Font = new Font("Segoe UI", 9F);
+
+            RComboBox comboOmenGpuMode = new RComboBox();
+            comboOmenGpuMode.DropDownStyle = ComboBoxStyle.DropDownList;
+            comboOmenGpuMode.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            comboOmenGpuMode.Width = 309;
+            comboOmenGpuMode.Height = 40;
+            comboOmenGpuMode.Location = new Point(panelOmenGpuMode.Width - comboOmenGpuMode.Width - 22, 8);
+            comboOmenGpuMode.Font = new Font("Segoe UI", 9F);
+            comboOmenGpuMode.Items.AddRange(new object[] { "Hybrid", "Dedicated", "Integrated" });
+
+            // Map values: 0 = Hybrid, 1 = Discrete, 2 = Optimus (Integrated)
+            comboOmenGpuMode.SelectedIndex = (currentMode >= 0 && currentMode <= 2) ? currentMode : -1;
+
+            comboOmenGpuMode.SelectedIndexChanged += (s, e) =>
+            {
+                int newMode = comboOmenGpuMode.SelectedIndex;
+                Program.acpi.OmenSetGpuMode(newMode);
+
+                DialogResult dialogResult = MessageBox.Show(Properties.Strings.AlertAPUMemoryRestart, 
+                    Properties.Strings.AlertAPUMemoryRestartTitle, MessageBoxButtons.YesNo);
+                if (dialogResult == DialogResult.Yes)
+                {
+                    Process.Start("shutdown", "/r /t 1");
+                }
+            };
+
+            panelOmenGpuMode.Controls.Add(labelOmenGpuMode);
+            panelOmenGpuMode.Controls.Add(comboOmenGpuMode);
+
+            this.Controls.Add(panelOmenGpuMode);
+            
+            // Place it in the same visual position as the normal APU panel
+            int apuIndex = this.Controls.IndexOf(panelAPU);
+            if (apuIndex >= 0)
+            {
+                this.Controls.SetChildIndex(panelOmenGpuMode, apuIndex + 1);
+            }
+        }
+
+        private void InitOmenRgbMethod()
+        {
+            if (!Program.acpi.IsOmen()) return;
+
+            int currentMethod = AppConfig.Get("omen_rgb_method", 0);
+
+            Panel panelOmenRgb = new Panel();
+            panelOmenRgb.Width = this.Width;
+            panelOmenRgb.Dock = DockStyle.Top;
+            panelOmenRgb.Height = 57;
+            panelOmenRgb.Padding = new Padding(11, 5, 11, 0);
+
+            Label labelOmenRgb = new Label();
+            labelOmenRgb.Text = "Omen RGB Method";
+            labelOmenRgb.AutoSize = true;
+            labelOmenRgb.Location = new Point(50, 15);
+            labelOmenRgb.Font = new Font("Segoe UI", 9F);
+
+            RComboBox comboOmenRgb = new RComboBox();
+            comboOmenRgb.DropDownStyle = ComboBoxStyle.DropDownList;
+            comboOmenRgb.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            comboOmenRgb.Width = 309;
+            comboOmenRgb.Height = 40;
+            comboOmenRgb.Location = new Point(panelOmenRgb.Width - comboOmenRgb.Width - 22, 8);
+            comboOmenRgb.Font = new Font("Segoe UI", 9F);
+            comboOmenRgb.Items.AddRange(new object[] { 
+                "Auto (Detect)", 
+                "WMI (4-Zone)", 
+                "EC Direct (Legacy)", 
+                "Logitech USB (Per-Key)", 
+                "Corsair USB (Per-Key)",
+                "OmenMon CLI"
+            });
+
+            comboOmenRgb.SelectedIndex = (currentMethod >= 0 && currentMethod <= 5) ? currentMethod : 0;
+
+            comboOmenRgb.SelectedIndexChanged += (s, e) =>
+            {
+                int newMethod = comboOmenRgb.SelectedIndex;
+                AppConfig.Set("omen_rgb_method", newMethod);
+                
+                // Re-apply current lighting profile with new method
+                Program.settingsForm.SetAura();
+            };
+
+            panelOmenRgb.Controls.Add(labelOmenRgb);
+            panelOmenRgb.Controls.Add(comboOmenRgb);
+
+            this.Controls.Add(panelOmenRgb);
+            
+            int gpuIndex = this.Controls.IndexOf(this.Controls.OfType<Panel>().FirstOrDefault(p => p.Controls.OfType<Label>().Any(l => l.Text.Contains("GPU Mode"))));
+            if (gpuIndex >= 0)
+            {
+                this.Controls.SetChildIndex(panelOmenRgb, gpuIndex + 1);
+            }
         }
 
         private void panelAPU_Paint(object sender, PaintEventArgs e)

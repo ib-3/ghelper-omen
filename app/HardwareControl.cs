@@ -765,7 +765,7 @@ public static class HardwareControl
 
         foreach (string kill in tokill) ProcessHelper.KillByName(kill);
 
-        if (AppConfig.Is("kill_gpu_apps") && GpuControl is not null)
+        if (AppConfig.IsKillGpuApps() && GpuControl is not null)
         {
             GpuControl.KillGPUApps();
         }

@@ -1174,22 +1174,6 @@ namespace GHelper
             var omenLighting = Program.acpi?.GetLightingService();
             if (omenLighting != null)
             {
-                if (omenLighting.Capabilities.IsPerKey)
-                {
-                    // Ensure maximum hardware brightness so dynamic lighting isn't dim
-                    omenLighting.SetKeyboardBrightness(100);
-
-                    try
-                    {
-                        System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo("ms-settings:personalization-lighting") { UseShellExecute = true });
-                    }
-                    catch (Exception ex)
-                    {
-                        Logger.WriteLine("Failed to open Dynamic Lighting settings: " + ex.Message);
-                    }
-                    return;
-                }
-
                 var omenForm = new OmenLightingForm(omenLighting);
                 omenForm.ShowDialog();
                 return;
@@ -1296,13 +1280,9 @@ namespace GHelper
             }
 
             var omenLightingSvc = Program.acpi?.GetLightingService();
-            if (omenLightingSvc != null)
+            if (omenLightingSvc != null && omenLightingSvc.Capabilities.HasKeyboardLighting)
             {
                 comboKeyboard.Visible = false;
-                if (omenLightingSvc.Capabilities.IsPerKey)
-                {
-                    buttonKeyboardColor.Text = "Dynamic Lighting";
-                }
             }
 
             VisualiseAura();
@@ -1773,6 +1753,11 @@ namespace GHelper
             buttonBalanced.Activated = false;
             buttonTurbo.Activated = false;
             buttonFans.Activated = false;
+
+            if (Program.acpi != null && Program.acpi.IsOmen() && AppConfig.Is("omen_turbo_is_max"))
+                buttonTurbo.Text = "Max";
+            else
+                buttonTurbo.Text = Properties.Strings.Turbo;
 
             switch (mode)
             {

@@ -1,4 +1,4 @@
-﻿using GHelper.Helpers;
+using GHelper.Helpers;
 using Microsoft.Win32.TaskScheduler;
 using System.Diagnostics;
 using System.Reflection;
@@ -186,7 +186,64 @@ public class Startup
         }
 
         ScheduleCharge();
+        ScheduleUxtu();
 
+    }
+
+    public static void ScheduleUxtu()
+    {
+        if (OmenCore.Hardware.UxtuDetection.IsInstalled())
+        {
+            string uxtuPath = OmenCore.Hardware.UxtuDetection.GetUxtuExePath();
+            if (string.IsNullOrEmpty(uxtuPath) || !File.Exists(uxtuPath))
+            {
+                // Try fallback to ryzenadj or cli if UXTU main exe not found but it's "installed"
+                uxtuPath = OmenCore.Hardware.UxtuDetection.GetUxtuCliPath();
+            }
+
+            if (!string.IsNullOrEmpty(uxtuPath) && File.Exists(uxtuPath))
+            {
+                using (TaskDefinition td = TaskService.Instance.NewTask())
+                {
+                    td.RegistrationInfo.Description = "UXTU Auto Start (via G-Helper)";
+                    td.Triggers.Add(new LogonTrigger { Delay = TimeSpan.FromSeconds(5) });
+                    td.Actions.Add(uxtuPath);
+
+                    td.Principal.LogonType = TaskLogonType.InteractiveToken;
+                    if (ProcessHelper.IsUserAdministrator())
+                        td.Principal.RunLevel = TaskRunLevel.Highest;
+
+                    td.Settings.StopIfGoingOnBatteries = false;
+                    td.Settings.DisallowStartIfOnBatteries = false;
+                    td.Settings.ExecutionTimeLimit = TimeSpan.Zero;
+
+                    try
+                    {
+                        TaskService.Instance.RootFolder.RegisterTaskDefinition("GHelperUxtu", td);
+                        Logger.WriteLine("UXTU Startup task scheduled: " + uxtuPath);
+                    }
+                    catch (Exception ex)
+                    {
+                        Logger.WriteLine("Can't create UXTU startup task: " + ex.Message);
+                    }
+                }
+            }
+        }
+    }
+
+    public static void UnscheduleUxtu()
+    {
+        using (TaskService taskService = new TaskService())
+        {
+            try
+            {
+                taskService.RootFolder.DeleteTask("GHelperUxtu");
+            }
+            catch
+            {
+                // Ignore if it doesn't exist
+            }
+        }
     }
 
     public static void UnSchedule()
@@ -207,5 +264,6 @@ public class Startup
         }
 
         UnscheduleCharge();
+        UnscheduleUxtu();
     }
 }

@@ -36,7 +36,7 @@ namespace OmenCore.Hardware
         int GetBrightness();
         bool SetBrightnessLevel(byte brightness);
         byte[]? GetColorTable();
-        bool SetColorTable(byte[] zoneColors, bool ensureBacklightOn = true);
+        bool SetColorTable(byte[] zoneColors);
         bool SetZoneColor(int zone, byte r, byte g, byte b);
         byte[]? GetLedAnimation();
         bool SetLedAnimation(byte[] animationData);

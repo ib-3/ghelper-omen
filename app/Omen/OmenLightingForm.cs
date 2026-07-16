@@ -136,9 +136,8 @@ namespace GHelper
                 BuildKeyboardZonePickers(zones);
 
                 panelZones.Visible = true;
-                if (!caps.IsFourZone && !caps.IsPerKey)
+                if (!caps.IsPerKey)
                 {
-                    // No effects maybe
                     groupKbdEffect.Visible = false;
                 }
             }

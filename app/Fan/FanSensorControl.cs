@@ -23,7 +23,7 @@ namespace GHelper.Fan
 
         static int[] _fanMax = InitFanMax();
         static int[] _fanMin = GetDefaultMin();
-        static bool _fanRpm = AppConfig.Is("fan_rpm");
+        static bool _fanRpm = AppConfig.Get("fan_rpm", 1) == 1;
 
         public FanSensorControl(Fans fansForm)
         {

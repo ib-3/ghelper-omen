@@ -38,10 +38,9 @@ namespace OmenCore.Hardware
         private readonly int _maxFanLevel;
         
         // Maximum ceiling for "Max" mode operations. When the user requests maximum cooling,
-        // we send a high value and let the BIOS clamp to its hardware maximum.
-        // This ensures models with max levels > 55 (e.g., OMEN 16-xd0xxx with 6300 RPM = level 63)
-        // can actually reach their full speed, rather than being capped at _maxFanLevel (55).
-        private const int MaxFanLevelCeiling = 100;
+        // we previously sent 100 and let the BIOS clamp to its hardware maximum.
+        // However, on some Transcend models, sending out-of-bound values breaks the BIOS fan curve.
+        // We now rely on the configured _maxFanLevel.
         
         // Countdown extension timer - keeps fan settings from reverting
         // HP BIOS aggressively reverts fan settings, especially on OMEN 16/Max/xd0xxx models with fast reversion
@@ -70,7 +69,7 @@ namespace OmenCore.Hardware
         private const int MaxModeMinDropChecksBeforeReapply = 2;
         private const int MaxModeTelemetryUnavailableReassertCycles = 3;
         private const int ManualModeReapplyIntervalMs = 2500;
-        private const int PresetModeReapplyIntervalMs = 4000;
+        private const int PresetModeReapplyIntervalMs = 30000;
         private const int MaxModeHealthyRpmFloor = 2000;
         private const double MaxModeHealthyLevelRatio = 0.40;
         
@@ -302,12 +301,10 @@ namespace OmenCore.Hardware
                     }
 
                     // Alternative: Try setting fan level directly to max
-                    // Use MaxFanLevelCeiling (100) instead of _maxFanLevel — let the BIOS clamp
-                    // to its actual hardware maximum. Models like OMEN 16-xd0xxx have max level 63
-                    // (6300 RPM), which _maxFanLevel (55) would miss.
-                    if (_wmiBios.SetFanLevel((byte)MaxFanLevelCeiling, (byte)MaxFanLevelCeiling))
+                    // Use _maxFanLevel instead of a hardcoded ceiling to avoid out-of-bounds BIOS errors.
+                    if (_wmiBios.SetFanLevel((byte)_maxFanLevel, (byte)_maxFanLevel))
                     {
-                        _logging?.Info($"✓ Fan level set to ceiling ({MaxFanLevelCeiling}, {MaxFanLevelCeiling}) — BIOS will clamp to hardware max. Awaiting verification...");
+                        _logging?.Info($"✓ Fan level set to ceiling ({_maxFanLevel}, {_maxFanLevel}) — BIOS will clamp to hardware max. Awaiting verification...");
 
                         if (VerifyMaxAppliedWithRetries(out var levelTelemetryUnavailable))
                         {
@@ -318,12 +315,12 @@ namespace OmenCore.Hardware
 
                         if (levelTelemetryUnavailable)
                         {
-                            _logging?.Warn($"Fan level set to {MaxFanLevelCeiling} but telemetry is unavailable - accepting command and maintaining max mode with keepalive");
+                            _logging?.Warn($"Fan level set to {_maxFanLevel} but telemetry is unavailable - accepting command and maintaining max mode with keepalive");
                             MarkMaxModeAccepted();
                             return true;
                         }
 
-                        _logging?.Warn($"Fan level set to {MaxFanLevelCeiling} but verification failed");
+                        _logging?.Warn($"Fan level set to {_maxFanLevel} but verification failed");
                     }
 
                     // Rollback: if SetFanMax was accepted by BIOS but verification failed, make sure to clear the hardware override
@@ -560,15 +557,15 @@ namespace OmenCore.Hardware
                         else
                         {
                             // Fallback to SetFanLevel if SetFanMax fails
-                            success = _wmiBios.SetFanLevel((byte)MaxFanLevelCeiling, (byte)MaxFanLevelCeiling);
+                            success = _wmiBios.SetFanLevel((byte)_maxFanLevel, (byte)_maxFanLevel);
                             if (success)
                             {
-                                AddCommandToHistory($"SetFanLevel({MaxFanLevelCeiling}, {MaxFanLevelCeiling})", true, null, rpmBefore, null);
+                                AddCommandToHistory($"SetFanLevel({_maxFanLevel}, {_maxFanLevel})", true, null, rpmBefore, null);
                                 _logging?.Info($"✓ Fan speed set to 100% via SetFanLevel ceiling fallback (attempt {attempt}/{maxRetries})");
                             }
                             else
                             {
-                                AddCommandToHistory($"SetFanLevel({MaxFanLevelCeiling}, {MaxFanLevelCeiling})", false, "Command failed", rpmBefore, null);
+                                AddCommandToHistory($"SetFanLevel({_maxFanLevel}, {_maxFanLevel})", false, "Command failed", rpmBefore, null);
                             }
                         }
                     }
@@ -685,8 +682,8 @@ namespace OmenCore.Hardware
                     }
                     else
                     {
-                        success = _wmiBios.SetFanLevel((byte)MaxFanLevelCeiling, (byte)MaxFanLevelCeiling);
-                        if (success)
+                        var fallbackOk = _wmiBios.SetFanLevel((byte)_maxFanLevel, (byte)_maxFanLevel);
+                        if (fallbackOk)
                         {
                             _logging?.Info($"✓ Both fans set to 100% via SetFanLevel ceiling fallback");
                         }
@@ -1640,10 +1637,10 @@ namespace OmenCore.Hardware
                         {
                             _logging?.Warn("External fan reset suspected - failed to re-apply Max mode, trying fallback");
                             AddCommandToHistory("SetFanMax(true)", false, resetDetails, null, GetCurrentFanRpm());
-                            // Fallback: send ceiling value (100) — let BIOS clamp to hardware max
-                            var fallbackSucceeded = _wmiBios.SetFanLevel((byte)MaxFanLevelCeiling, (byte)MaxFanLevelCeiling);
+                            // Fallback: send _maxFanLevel value
+                            var fallbackSucceeded = _wmiBios.SetFanLevel((byte)_maxFanLevel, (byte)_maxFanLevel);
                             AddCommandToHistory(
-                                $"SetFanLevel({MaxFanLevelCeiling}, {MaxFanLevelCeiling})",
+                                $"SetFanLevel({_maxFanLevel}, {_maxFanLevel})",
                                 fallbackSucceeded,
                                 $"{resetDetails}; SetFanMax(true) failed, fallback {(fallbackSucceeded ? "sent" : "failed")}.",
                                 null,

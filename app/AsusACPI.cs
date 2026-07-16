@@ -32,6 +32,7 @@ internal sealed class OmenBackend : IDisposable
     private readonly IFanController? _fans;
     private readonly WmiBiosMonitor? _monitor; // [NEW] High-precision monitor
     private readonly IMsrAccess? _msrAccess;   // PawnIO MSR — null on Ryzen or if PawnIO not installed
+    private readonly OmenCore.Hardware.PowerLimitController? _powerLimitController;
     private OmenCore.Hardware.IMmioAccess? _mmioAccess;
     private OmenCore.Hardware.MmioPowerLimitProvider? _mmioLimits;
     private readonly byte[][] _curves = new byte[2][];
@@ -40,16 +41,17 @@ internal sealed class OmenBackend : IDisposable
     private int _lastEvaluatedCpuPercent = -1;
     private int _lastEvaluatedGpuPercent = -1;
 
-    // [MODIFIED] Constructor now accepts WmiBiosMonitor + msrAccess
-    private OmenBackend(LoggingService logging, HpWmiBios? bios, IFanController? fans, WmiBiosMonitor? monitor, IMsrAccess? msrAccess)
+    // [MODIFIED] Constructor now accepts WmiBiosMonitor + msrAccess + powerLimitController
+    private OmenBackend(LoggingService logging, HpWmiBios? bios, IFanController? fans, WmiBiosMonitor? monitor, IMsrAccess? msrAccess, OmenCore.Hardware.PowerLimitController? powerLimitController)
     {
         _logging = logging;
         _bios = bios;
         _fans = fans;
         _monitor = monitor;
         _msrAccess = msrAccess;
-        _curves[(int)AsusFan.CPU] = DefaultCurve(AsusFan.CPU);
-        _curves[(int)AsusFan.GPU] = DefaultCurve(AsusFan.GPU);
+        _powerLimitController = powerLimitController;
+        _curves[(int)AsusFan.CPU] = new byte[16];
+        _curves[(int)AsusFan.GPU] = new byte[16];
 
         // Read CPU's actual max power from MSR 0x614 or MMIO for the slider max (Intel only)
         if (msrAccess?.IsAvailable == true && !PawnIO.CpuInfo.IsAMD)
@@ -80,8 +82,10 @@ internal sealed class OmenBackend : IDisposable
 
             if (maxPower > 0 && maxPower < 500)
             {
-                AsusACPI.MaxTotal = Math.Max(maxPower, 150);
-                Logger.WriteLine($"[OmenBackend] MaxTotal set to {AsusACPI.MaxTotal}W (detected {maxPower}W from {(fromMmio ? "MMIO" : "MSR")})");
+                bool isLaptop = System.Windows.Forms.SystemInformation.PowerStatus.BatteryChargeStatus != System.Windows.Forms.BatteryChargeStatus.NoSystemBattery;
+                int maxAllowed = isLaptop ? 180 : 500;
+                AsusACPI.MaxTotal = Math.Min(Math.Max(maxPower, 150), maxAllowed);
+                Logger.WriteLine($"[OmenBackend] MaxTotal set to {AsusACPI.MaxTotal}W (detected {maxPower}W from {(fromMmio ? "MMIO" : "MSR")}, isLaptop: {isLaptop})");
             }
         }
     }
@@ -99,7 +103,16 @@ internal sealed class OmenBackend : IDisposable
     */
 
     public bool IsAvailable => (_bios?.IsAvailable ?? false) || (_fans?.IsAvailable ?? false);
-    private bool HasCpuPowerLimitControl => !CpuInfo.IsAMD && (_msrAccess?.IsAvailable == true || (_bios?.IsAvailable ?? false));
+    private bool HasCpuPowerLimitControl
+    {
+        get
+        {
+            if (CpuInfo.IsAMD)
+                return GHelper.Mode.ModeControl.IsPawnInstalled();
+            
+            return _msrAccess?.IsAvailable == true || (_bios?.IsAvailable ?? false);
+        }
+    }
 
     // ── Lighting ──────────────────────────────────────────────────────────
     private OmenCore.Hardware.OmenLightingService? _lightingService;
@@ -148,15 +161,22 @@ internal sealed class OmenBackend : IDisposable
 
             try
             {
-                var wmiFans = new WmiFanController(null, logging, injectedWmiBios: bios);
-                fans = new OmenCore.Hardware.WmiFanControllerWrapper(wmiFans, logging);
-                if (!wmiFans.IsAvailable)
+                var ecAccess = OmenCore.Hardware.EcAccessFactory.GetEcAccess();
+                
+                // Always try EC direct fan control first as requested
+                if (ecAccess != null && ecAccess.IsAvailable)
                 {
-                    var ecAccess = OmenCore.Hardware.EcAccessFactory.GetEcAccess();
                     var registerMap = new System.Collections.Generic.Dictionary<string, int>();
                     var baseController = new OmenCore.Hardware.FanController(ecAccess, registerMap, null, logging, bios);
                     fans = new OmenCore.Hardware.EcFanControllerWrapper(baseController, null, logging);
-                    Logger.WriteLine($"OMEN backend: WMI Fan Controller not available. Falling back to Legacy EC Fan Controller (EC access: {(ecAccess?.IsAvailable == true ? "available" : "unavailable — no PawnIO/WinRing0")}).");
+                    Logger.WriteLine($"OMEN backend: Using direct EC Fan Controller (EC access: available).");
+                }
+                else
+                {
+                    // Fallback to WMI if EC is unavailable
+                    var wmiFans = new WmiFanController(null, logging, injectedWmiBios: bios);
+                    fans = new OmenCore.Hardware.WmiFanControllerWrapper(wmiFans, logging);
+                    Logger.WriteLine($"OMEN backend: EC access unavailable. Falling back to WMI Fan Controller.");
                 }
             }
             catch (Exception ex)
@@ -205,10 +225,29 @@ internal sealed class OmenBackend : IDisposable
                 }
             }
 
+            OmenCore.Hardware.PowerLimitController? powerLimitController = null;
+            try
+            {
+                var ecAccess = OmenCore.Hardware.EcAccessFactory.GetEcAccess();
+                if (ecAccess != null && ecAccess.IsAvailable)
+                {
+                    powerLimitController = new OmenCore.Hardware.PowerLimitController(ecAccess, useSimplifiedMode: true);
+                    Logger.WriteLine("OMEN backend: PowerLimitController initialized via PawnIO EC access.");
+                }
+                else
+                {
+                    Logger.WriteLine("OMEN backend: PowerLimitController unavailable (no EC access).");
+                }
+            }
+            catch (Exception ex)
+            {
+                Logger.WriteLine($"OMEN backend: PowerLimitController init failed: {ex.GetType().Name}: {ex.Message}");
+            }
+
             Logger.WriteLine($"OMEN backend: BIOS={bios?.Status ?? "null"}, Fans={fans?.Status ?? "null"}, Monitor={monitor?.MonitoringSource ?? "null"}");
 
-            // [MODIFIED] Return backend with monitor + MSR access
-            return new OmenBackend(logging, bios, fans, monitor, msrAccess);
+            // [MODIFIED] Return backend with monitor + MSR access + PowerLimitController
+            return new OmenBackend(logging, bios, fans, monitor, msrAccess, powerLimitController);
 
             /* [LEGACY TRYCREATE RETURN]
             Logger.WriteLine($"OMEN backend: BIOS={bios?.Status ?? "null"}, Fans={fans?.Status ?? "null"}");
@@ -285,13 +324,54 @@ internal sealed class OmenBackend : IDisposable
         {
             string mode = status switch
             {
-                AsusACPI.PerformanceTurbo => "Performance",
+                AsusACPI.PerformanceTurbo => AppConfig.Is("omen_turbo_is_max") ? "Max" : "Performance",
                 AsusACPI.PerformanceSilent => "Quiet",
                 _ => "Balanced"
             };
 
-            result = (_fans?.SetPerformanceMode(mode) ?? false) ? 1 : -1;
-            Logger.WriteLine($"{logName ?? "OmenMode"} = {mode} : {(result == 1 ? "OK" : result)}");
+            if (_powerLimitController != null && _powerLimitController.IsAvailable)
+            {
+                var perfMode = new OmenCore.Models.PerformanceMode { Name = mode };
+                try
+                {
+                    _powerLimitController.ApplyPerformanceLimits(perfMode);
+                    Logger.WriteLine($"OmenPowerLimitController = {mode} : OK");
+                }
+                catch (Exception ex)
+                {
+                    Logger.WriteLine($"OmenPowerLimitController = {mode} : {ex.Message}");
+                }
+            }
+            else
+            {
+                Logger.WriteLine($"OmenPowerLimitController = {mode} : UNAVAILABLE (No EC Access/Admin)");
+            }
+
+            if (!AppConfig.IsApplyFans())
+            {
+                // Also set the appropriate base performance mode
+                result = (_fans?.SetPerformanceMode(mode) ?? false) ? 1 : -1;
+                
+                if (mode == "Max")
+                {
+                    _fans?.ApplyMaxCooling();
+                }
+                
+                Logger.WriteLine($"{logName ?? "OmenMode"} = {mode} : OK (BIOS Native Curve)");
+            }
+            else
+            {
+                // Decouple fan mode from performance mode (like omencore)
+                // This prevents the BIOS/EC from overriding custom fan curves with static values
+                if (mode == "Max")
+                {
+                    _fans?.SetPerformanceMode("Performance");
+                    _fans?.ApplyMaxCooling();
+                }
+                
+                result = 1;
+                Logger.WriteLine($"{logName ?? "OmenMode"} = {mode} : OK (Fan curve unlinked)");
+            }
             return true;
         }
 
@@ -435,20 +515,13 @@ internal sealed class OmenBackend : IDisposable
                 return mode.Value == HpWmiBios.GpuMode.Optimus ? 1 : 0;
         }
         catch { }
-        return 0; // default: not in eco
+        return AppConfig.Get("gpu_mode") == AsusACPI.GPUModeEco ? 1 : 0;
     }
 
     private int ReadGpuMuxFlag()
     {
-        try
-        {
-            var mode = _bios?.GetGpuMode();
-            if (mode.HasValue)
-                // Discrete = Ultimate (mux=0), Hybrid/Optimus = Standard (mux=1)
-                return mode.Value == HpWmiBios.GpuMode.Discrete ? 0 : 1;
-        }
-        catch { }
-        return 1; // default Hybrid
+        // The user requested to hide the Ultimate button for Omen and Victus laptops.
+        return -1;
     }
 
     private int ReadGpuPowerFlag()
@@ -468,12 +541,37 @@ internal sealed class OmenBackend : IDisposable
         return 15;
     }
 
+    private OmenCore.Hardware.AmdUndervoltProvider? _amdPowerProvider;
+
     private bool SetCpuPowerLimit(uint deviceId, int watts)
     {
         if (!HasCpuPowerLimitControl)
         {
             Logger.WriteLine("OmenPowerLimit: No backend available");
             return false;
+        }
+
+        if (CpuInfo.IsAMD)
+        {
+            if (_amdPowerProvider == null)
+            {
+                try { _amdPowerProvider = new OmenCore.Hardware.AmdUndervoltProvider(); }
+                catch { return false; }
+            }
+
+            uint valueMw = (uint)(watts * 1000);
+            OmenCore.Hardware.RyzenSmu.SmuStatus status = OmenCore.Hardware.RyzenSmu.SmuStatus.Failed;
+
+            if (deviceId == AsusACPI.PPT_APUA3) // SPL
+                status = _amdPowerProvider.SetStapmLimit(valueMw);
+            else if (deviceId == AsusACPI.PPT_APUA0) // sPPT
+                status = _amdPowerProvider.SetSlowPptLimit(valueMw);
+            else if (deviceId == AsusACPI.PPT_APUC1) // fPPT
+                status = _amdPowerProvider.SetFastPptLimit(valueMw);
+
+            bool success = status == OmenCore.Hardware.RyzenSmu.SmuStatus.Ok;
+            Logger.WriteLine($"OmenPowerLimit: AMD SMU write {(success ? "OK" : $"FAILED ({status})")} — {watts}W");
+            return success;
         }
 
         if (deviceId == AsusACPI.PPT_APUA3)
@@ -632,6 +730,11 @@ internal sealed class OmenBackend : IDisposable
         return device is AsusFan.CPU or AsusFan.GPU;
     }
 
+    public void RestoreAutoControl()
+    {
+        _fans?.RestoreAutoControl();
+    }
+
     public bool TryGetFanCurve(AsusFan device, int mode, out byte[]? curve)
     {
         curve = device switch
@@ -652,26 +755,17 @@ internal sealed class OmenBackend : IDisposable
         result = -1;
         if (device is not (AsusFan.CPU or AsusFan.GPU)) return false;
 
-        // When GHelper resets to Factory Defaults, it sends an empty curve (all zeroes).
-        if (curve.Length != 16 || curve.All(singleByte => singleByte == 0))
+        // If "Max" mode is active, ignore all software curves and let ApplyMaxCooling keep fans at 100%
+        if (AppConfig.Is("omen_turbo_is_max") && AppConfig.Get("performance_mode") == AsusACPI.PerformanceTurbo)
         {
-            _curves[(int)device] = new byte[16];
-            
-            // If BOTH CPU and GPU custom curves are now clear, restore BIOS automatic fan control
-            if (_curves[(int)AsusFan.CPU].All(b => b == 0) && _curves[(int)AsusFan.GPU].All(b => b == 0))
-            {
-                _lastEvaluatedCpuPercent = -1;
-                _lastEvaluatedGpuPercent = -1;
-                _ewmaCpuTemp = -1;
-                _ewmaGpuTemp = -1;
-                result = _fans.RestoreAutoControl() ? 1 : -1;
-                Logger.WriteLine($"OmenFanCurve: Restored BIOS Auto Control : {(result == 1 ? "OK" : result)}");
-            }
-            else
-            {
-                result = 1;
-            }
+            result = 1;
             return true;
+        }
+
+        // Force software loop to use the default curve if an empty curve is provided
+        if ((curve.Length != 16 && curve.Length != 24) || curve.All(singleByte => singleByte == 0))
+        {
+            curve = AppConfig.GetDefaultCurve(device);
         }
 
         _curves[(int)device] = curve.ToArray();
@@ -729,18 +823,32 @@ internal sealed class OmenBackend : IDisposable
         return -1;
     }
 
-    private static int EvaluateCurve(byte[] curve, double temp)
+    private static int EvaluateCurve(byte[]? curve, double temp)
     {
-        if (curve.Length != 16) return 0;
+        if (curve == null || (curve.Length != 16 && curve.Length != 24)) return 0;
 
-        int selected = curve[8];
-        for (int i = 0; i < 8; i++)
+        int count = curve.Length / 2;
+        int selected = curve[count];
+        
+        // Find the right segment and interpolate linearly
+        if (temp <= curve[0]) return curve[count];
+        if (temp >= curve[count - 1]) return curve[curve.Length - 1];
+
+        for (int i = 0; i < count - 1; i++)
         {
-            if (temp >= curve[i])
-                selected = curve[i + 8];
+            if (temp >= curve[i] && temp <= curve[i + 1])
+            {
+                double rangeTemp = curve[i + 1] - curve[i];
+                if (rangeTemp == 0) return curve[i + count + 1]; // Avoid divide by zero
+
+                double rangeSpeed = curve[i + count + 1] - curve[i + count];
+                double progress = (temp - curve[i]) / rangeTemp;
+
+                return Math.Clamp((int)Math.Round(curve[i + count] + (rangeSpeed * progress)), 0, 100);
+            }
         }
 
-        return Math.Clamp(selected, 0, 100);
+        return curve[curve.Length - 1];
     }
 
     private static byte[] DefaultCurve(AsusFan fan)
@@ -820,6 +928,29 @@ internal sealed class OmenBackend : IDisposable
         try { _monitor?.Dispose(); } catch { }
         try { _fans?.Dispose(); } catch { }
         try { _bios?.Dispose(); } catch { }
+    }
+
+    public int OmenGetGpuMode()
+    {
+        try
+        {
+            var mode = _bios?.GetGpuMode();
+            if (mode.HasValue) return (int)mode.Value;
+        }
+        catch { }
+        return -1;
+    }
+
+    public bool OmenSetGpuMode(int mode)
+    {
+        try
+        {
+            if (_bios == null || !_bios.IsAvailable) return false;
+            bool result = _bios.SetGpuMode((HpWmiBios.GpuMode)mode);
+            Logger.WriteLine($"OmenGpuMode Set to {mode}: {result}");
+            return result;
+        }
+        catch { return false; }
     }
 }
 
@@ -1372,6 +1503,11 @@ public class AsusACPI
     }
 
 
+    public void RestoreFansToAuto()
+    {
+        _omen?.RestoreAutoControl();
+    }
+
     public int SetFanCurve(AsusFan device, byte[] curve)
     {
         if (_omen?.TrySetFanCurve(device, curve, out int omenResult) == true)
@@ -1442,7 +1578,7 @@ public class AsusACPI
 
     public static bool IsInvalidCurve(byte[] curve)
     {
-        return curve.Length != 16 || IsEmptyCurve(curve);
+        return (curve.Length != 16 && curve.Length != 24) || IsEmptyCurve(curve);
     }
 
     public static bool IsEmptyCurve(byte[] curve)
@@ -1491,15 +1627,17 @@ public class AsusACPI
 
     public static byte[] FixFanCurve(byte[] curve)
     {
-        if (curve.Length != 16) throw new Exception("Incorrect curve");
+        if (curve.Length != 16 && curve.Length != 24) throw new Exception("Incorrect curve");
+
+        int length = curve.Length / 2;
 
         var points = new Dictionary<byte, byte>();
         byte old = 0;
 
-        for (int i = 0; i < 8; i++)
+        for (int i = 0; i < length; i++)
         {
             if (curve[i] <= old) curve[i] = (byte)Math.Min(100, old + 6); // preventing 2 points in same spot from default asus profiles
-            points[curve[i]] = curve[i + 8];
+            points[curve[i]] = curve[i + length];
             old = curve[i];
         }
 
@@ -1527,13 +1665,13 @@ public class AsusACPI
 
             if (AppConfig.IsClampFanDots())
             {
-                int minX = 30 + (count * 10);
-                int maxX = minX + 10;
+                int minX = length == 8 ? (30 + (count * 10)) : (20 + (count * 6));
+                int maxX = minX + (length == 8 ? 10 : 6);
                 x = Math.Max(minX, Math.Min(maxX, x));
             }
 
             curve[count] = (byte)x;
-            curve[count + 8] = pair.Value;
+            curve[count + length] = pair.Value;
             count++;
         }
 
@@ -1750,6 +1888,16 @@ public class AsusACPI
 
     public bool IsOmen() => _omen?.IsAvailable == true;
 
+    public int OmenGetGpuMode()
+    {
+        return _omen?.OmenGetGpuMode() ?? -1;
+    }
+
+    public bool OmenSetGpuMode(int mode)
+    {
+        return _omen?.OmenSetGpuMode(mode) ?? false;
+    }
+
     public bool HasOmenPerKeyRgb()
     {
         return _omen?.HasPerKeyRgb() == true;
@@ -1846,6 +1994,5 @@ public class AsusACPI
             Logger.WriteLine("Failed to start OMEN WMI events: " + ex.Message);
         }
     }
-
 
 }

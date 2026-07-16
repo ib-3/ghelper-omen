@@ -192,7 +192,7 @@ namespace OmenCore.Hardware
                 if (_intelMsrModule == null || _intelMsrModule.Length == 0) return false;
 
                 int hr = _pawnioLoad!(_handle, _intelMsrModule, (IntPtr)_intelMsrModule.Length);
-                return hr >= 0;
+                return hr >= 0 || hr == unchecked((int)0x800704DF);
             }
             catch
             {
@@ -206,7 +206,7 @@ namespace OmenCore.Hardware
             try
             {
                 int hr = _pawnioLoad!(_handle, blob, (IntPtr)blob.Length);
-                if (hr < 0)
+                if (hr < 0 && hr != unchecked((int)0x800704DF)) // ERROR_ALREADY_INITIALIZED
                 {
                     Logger.WriteLine($"[PawnIOMsrAccess] pawnio_load failed: HRESULT 0x{hr:X8} "
                                      + "(module may be unsigned or for wrong PawnIO version)");

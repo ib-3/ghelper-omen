@@ -16,7 +16,7 @@ public static class AppConfig
 
     static AppConfig()
     {
-        string configName = "config_v2.json";
+        string configName = "config.json";
         string appPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "GHelper");
         string startupConfig = Path.Combine(Application.StartupPath.Trim('\\'), configName);
 
@@ -256,6 +256,10 @@ public static class AppConfig
         if (curveString is not null)
             curve = StringToBytes(curveString);
 
+        // If no saved config, use the mode-aware default curve
+        if (curve.Length == 0)
+            curve = GetDefaultCurve(device);
+
         return curve;
     }
 
@@ -276,34 +280,39 @@ public static class AppConfig
     public static byte[] GetDefaultCurve(AsusFan device)
     {
         int mode = Modes.GetCurrentBase();
-        byte[] curve;
 
-        switch (mode)
+        if (IsOmen())
         {
-            case AsusACPI.PerformanceTurbo:
-                switch (device)
-                {
-                    case AsusFan.GPU:
-                        return StringToBytes("1E-3F-44-48-4C-50-54-62-16-1F-26-2D-39-47-55-5F");
-                    default:
-                        return StringToBytes("1E-3F-44-48-4C-50-54-62-11-1A-22-29-34-43-51-5A");
-                }
-            case AsusACPI.PerformanceSilent:
-                switch (device)
-                {
-                    case AsusFan.GPU:
-                        return StringToBytes("1E-31-3B-42-47-50-5A-64-00-00-04-11-1B-23-28-2D");
-                    default:
-                        return StringToBytes("1E-31-3B-42-47-50-5A-64-00-00-03-0C-14-1C-22-29");
-                }
-            default:
-                switch (device)
-                {
-                    case AsusFan.GPU:
-                        return StringToBytes("3A-3D-40-44-48-4D-51-62-0C-16-1D-1F-26-2D-34-4A");
-                    default:
-                        return StringToBytes("3A-3D-40-44-48-4D-51-62-08-11-16-1A-22-29-30-45");
-                }
+            switch (mode)
+            {
+                case AsusACPI.PerformanceTurbo:
+                    // Turbo curve temps: 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 100
+                    // Turbo curve fan speeds: 20, 30, 40, 50, 60, 70, 80, 90, 100, 100, 100, 100
+                    return StringToBytes("28-2D-32-37-3C-41-46-4B-50-55-5A-64-14-1E-28-32-3C-46-50-5A-64-64-64-64");
+                case AsusACPI.PerformanceSilent:
+                    // Silent curve temps: 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 100
+                    // Silent curve fan speeds: 0, 0, 0, 10, 20, 30, 40, 50, 60, 70, 80, 100
+                    return StringToBytes("28-2D-32-37-3C-41-46-4B-50-55-5A-64-00-00-00-0A-14-1E-28-32-3C-46-50-64");
+                default:
+                    // Balanced curve temps: 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 100
+                    // Balanced curve fan speeds: 0, 10, 20, 30, 40, 45, 50, 60, 70, 80, 90, 100
+                    return StringToBytes("28-2D-32-37-3C-41-46-4B-50-55-5A-64-00-0A-14-1E-28-2D-32-3C-46-50-5A-64");
+            }
+        }
+        else
+        {
+            switch (mode)
+            {
+                case AsusACPI.PerformanceTurbo:
+                    // Omen-style unleashed curve
+                    return StringToBytes("28-32-3C-46-50-55-5A-64-14-19-1E-28-3C-50-64-64");
+                case AsusACPI.PerformanceSilent:
+                    // Omen-style quiet curve
+                    return StringToBytes("28-32-3C-46-50-55-5A-64-00-00-14-1E-2D-3C-64-64");
+                default:
+                    // Omen-style balanced curve
+                    return StringToBytes("28-32-3C-46-50-55-5A-64-00-14-19-23-37-46-64-64");
+            }
         }
     }
 
@@ -557,7 +566,10 @@ public static class AppConfig
         return ContainsModel("FA507NUR") || ContainsModel("FA506NCR") || ContainsModel("FA507NVR");
     }
 
-    public static bool IsApplyPower() => IsMode("auto_apply_power");
+    public static bool IsApplyPower()
+    {
+        return IsMode("auto_apply_power");
+    }
     public static bool IsApplyFans() => IsMode("auto_apply");
     public static bool IsApplyUV() => IsMode("auto_uv");
 
@@ -599,7 +611,22 @@ public static class AppConfig
 
     public static bool IsNVPlatform()
     {
-        return Is("nv_platform");
+        int val = GetMode("nv_platform");
+        if (val == -1)
+        {
+            try { if (GHelper.Program.acpi?.IsOmen() == true) return true; } catch { }
+        }
+        return val == 1;
+    }
+
+    public static bool IsKillGpuApps()
+    {
+        int val = GetMode("kill_gpu_apps");
+        if (val == -1)
+        {
+            try { if (GHelper.Program.acpi?.IsOmen() == true) return true; } catch { }
+        }
+        return val == 1;
     }
 
     public static bool IsForceSetGPUMode()

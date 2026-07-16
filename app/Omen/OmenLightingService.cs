@@ -100,6 +100,30 @@ namespace OmenCore.Hardware
             _logging = logging;
         }
 
+        public GHelper.Omen.Lighting.IOmenLightingBackend GetActiveBackend()
+        {
+            int method = AppConfig.Get("omen_rgb_method", 0);
+            
+            // Auto detection based on capabilities
+            if (method == 0)
+            {
+                if (Capabilities.IsPerKey)
+                    return new GHelper.Omen.Lighting.LogitechUsbBackend();
+                
+                return new GHelper.Omen.Lighting.WmiLightingBackend(_bios);
+            }
+            
+            switch (method)
+            {
+                case 1: return new GHelper.Omen.Lighting.WmiLightingBackend(_bios);
+                case 2: return new GHelper.Omen.Lighting.EcDirectBackend();
+                case 3: return new GHelper.Omen.Lighting.LogitechUsbBackend();
+                case 4: return new GHelper.Omen.Lighting.CorsairUsbBackend();
+                case 5: return new GHelper.Omen.Lighting.OmenMonBackend();
+                default: return new GHelper.Omen.Lighting.WmiLightingBackend(_bios);
+            }
+        }
+
         // ──────────────────────────────────────────────────────────────────
         // Initialisation / auto-probe
         // ──────────────────────────────────────────────────────────────────
@@ -131,6 +155,11 @@ namespace OmenCore.Hardware
                     if (ctable != null && ctable.Length > 0 && ctable[0] > 0)
                     {
                         caps.KeyboardZoneCount = ctable[0];
+                        if (caps.KeyboardZoneCount == 3 && !caps.IsPerKey)
+                        {
+                            _logging?.Info("OmenLightingService: Keyboard reported 3 zones, forcing to 4 for Omen standard keyboard.");
+                            caps.KeyboardZoneCount = 4;
+                        }
                     }
                     else
                     {
@@ -141,13 +170,12 @@ namespace OmenCore.Hardware
                 }
                 else
                 {
-                    // Fallback: assume standard 4-zone if backlight is present
-                    caps.KeyboardType = HpWmiBios.KbdType.TenKeyLess;
-                    _logging?.Info($"OmenLightingService: keyboard type unknown, HasBacklight={caps.HasKeyboardLighting}");
+                    _logging?.Info($"OmenLightingService: keyboard type unknown, checking HID...");
+                    caps.KeyboardType = HpWmiBios.KbdType.Unknown;
                 }
 
-                // Override: if a Vendor HID device is present, this is a PerKey keyboard
-                if (!caps.IsPerKey)
+                // Override: if a Vendor HID device is present AND keyboard type is unknown, assume PerKey keyboard
+                if (caps.KeyboardType == HpWmiBios.KbdType.Unknown)
                 {
                     var hidSvc = new OmenHidLightingService(_logging);
                     if (hidSvc.HasPerKeyRgbDevice())
@@ -155,6 +183,11 @@ namespace OmenCore.Hardware
                         caps.KeyboardType = HpWmiBios.KbdType.PerKeyRgb;
                         caps.HasKeyboardLighting = true;
                         _logging?.Info("OmenLightingService: Vendor HID device detected — overriding to PerKeyRgb");
+                    }
+                    else
+                    {
+                        caps.KeyboardType = HpWmiBios.KbdType.TenKeyLess;
+                        _logging?.Info("OmenLightingService: No HID device, falling back to TenKeyLess");
                     }
                 }
             }
@@ -192,12 +225,7 @@ namespace OmenCore.Hardware
         {
             if (!Capabilities.HasKeyboardLighting) return false;
 
-            if (Capabilities.IsPerKey)
-            {
-                var hid = new OmenHidLightingService(_logging);
-                Color c = zones != null && zones.Length > 0 ? zones[0] : Color.White;
-                return hid.SetStaticColor(c);
-            }
+            var backend = GetActiveBackend();
 
             if (zones == null || zones.Length == 0)
                 zones = new[] { Color.White };
@@ -212,8 +240,17 @@ namespace OmenCore.Hardware
                 zoneBytes[z * 3 + 2] = c.B;
             }
 
-            bool ok = _bios.SetColorTable(zoneBytes, ensureBacklightOn: true);
-            _logging?.Info($"SetKeyboardZoneColors: {(ok ? "OK" : "FAILED")}");
+            bool ok = backend.SetColorTable(zoneBytes);
+            
+            // Fallback for Transcend 14 (OmenHidLightingService) if WMI fails or is standard PerKey
+            if (!ok && Capabilities.IsPerKey)
+            {
+                var hid = new OmenHidLightingService(_logging);
+                Color c = zones != null && zones.Length > 0 ? zones[0] : Color.White;
+                ok = hid.SetStaticColor(c);
+            }
+
+            _logging?.Info($"SetKeyboardZoneColors (Backend: {backend.Name}): {(ok ? "OK" : "FAILED")}");
             return ok;
         }
 
@@ -221,7 +258,13 @@ namespace OmenCore.Hardware
         /// Set all keyboard zones to the same solid colour.
         /// </summary>
         public bool SetKeyboardSolidColor(Color color)
-            => SetKeyboardZoneColors(new[] { color });
+        {
+            if (!Capabilities.HasKeyboardLighting) return false;
+            int zones = Math.Max(4, Capabilities.KeyboardZoneCount);
+            Color[] colors = new Color[zones];
+            for (int i = 0; i < zones; i++) colors[i] = color;
+            return SetKeyboardZoneColors(colors);
+        }
 
         // ──────────────────────────────────────────────────────────────────
         // Keyboard — animation effects  (types 6/7 via BiosCmd.Keyboard)

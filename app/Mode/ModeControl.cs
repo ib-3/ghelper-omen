@@ -100,8 +100,8 @@ namespace GHelper.Mode
             Program.acpi.DeviceSet(AsusACPI.PerformanceMode, Modes.GetCurrentBase(), "Mode");
 
             // Default power mode tracking
-            AppConfig.RemoveMode("powermode");
-            // PowerNative.SetPowerMode(Modes.GetCurrentBase()); // DISABLED: don't change Windows power plan
+            // AppConfig.RemoveMode("powermode");
+            PowerNative.SetPowerMode(Modes.GetCurrentBase());
         }
 
         public void Toast()
@@ -178,10 +178,10 @@ namespace GHelper.Mode
             {
                 // Windows power plan changes DISABLED — Omen profiles should only
                 // affect Omen EC settings, not Windows power plan.
-                // if (AppConfig.GetModeString("powermode") is not null)
-                //     PowerNative.SetPowerMode(AppConfig.GetModeString("powermode"));
-                // else
-                //     PowerNative.SetPowerMode(Modes.GetBase(mode));
+                if (AppConfig.GetModeString("powermode") is not null)
+                    PowerNative.SetPowerMode(AppConfig.GetModeString("powermode"));
+                else
+                    PowerNative.SetPowerMode(Modes.GetBase(mode));
 
                 if (AppConfig.IsAutoASPM()) PowerNative.SetBalancedASPM();
             }
@@ -321,9 +321,6 @@ namespace GHelper.Mode
             if (!_ryzenPower) return;
             if (!AppConfig.IsApplyPower()) return;
 
-            var smu = GetSmu();
-            if (smu == null) return;
-
             int limit_total = AppConfig.GetMode("limit_total");
             int limit_slow = AppConfig.GetMode("limit_slow", limit_total);
             int limit_fast = AppConfig.GetMode("limit_fast", limit_slow);
@@ -331,9 +328,12 @@ namespace GHelper.Mode
             if (limit_total > AsusACPI.MaxTotal) return;
             if (limit_total < AsusACPI.MinTotal) return;
 
-            smu.SetAllLimits(limit_total, limit_fast, limit_slow,
-                out SmuStatus stapm, out SmuStatus fast, out SmuStatus slow);
-            if (init) Logger.WriteLine($"STAPM: {limit_total}W {stapm} | SLOW: {limit_slow}W {slow} | FAST: {limit_fast}W {fast}");
+            var smu = GetSmu();
+            if (smu != null)
+            {
+                smu.SetAdaptiveLimits(limit_total, out string log);
+                if (init) Logger.WriteLine($"Adaptive Mode: {log}");
+            }
         }
 
         public void SetPower(bool launchAsAdmin = false)
@@ -440,6 +440,9 @@ namespace GHelper.Mode
 
             if (gpu_power >= AsusACPI.MinGPUPower && gpu_power <= AsusACPI.MaxGPUPower && Program.acpi.IsSupported(AsusACPI.GPU_POWER))
                 Program.acpi.DeviceSet(AsusACPI.GPU_POWER, gpu_power, "PowerLimit TGP (GPU VAR)");
+                
+            if (Fans.IsSmiPowerLimit)
+                NvidiaSmi.SetPowerLimit(gpu_power);
 
             if (gpu_boost >= AsusACPI.MinGPUBoost && gpu_boost <= AsusACPI.MaxGPUBoost && Program.acpi.IsSupported(AsusACPI.PPT_GPUC0))
                 boostResult = Program.acpi.DeviceSet(AsusACPI.PPT_GPUC0, gpu_boost, "PowerLimit C0 (GPU BOOST)");

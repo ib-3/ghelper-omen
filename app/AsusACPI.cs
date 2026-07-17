@@ -174,7 +174,8 @@ internal sealed class OmenBackend : IDisposable
                 else
                 {
                     // Fallback to WMI if EC is unavailable
-                    var wmiFans = new WmiFanController(null, logging, injectedWmiBios: bios);
+                    int maxFanOverride = AppConfig.Get("omen_max_fan_level", 0);
+                    var wmiFans = new WmiFanController(null, logging, maxFanOverride, injectedWmiBios: bios);
                     fans = new OmenCore.Hardware.WmiFanControllerWrapper(wmiFans, logging);
                     Logger.WriteLine($"OMEN backend: EC access unavailable. Falling back to WMI Fan Controller.");
                 }

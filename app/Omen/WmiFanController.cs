@@ -263,8 +263,9 @@ namespace OmenCore.Hardware
                 {
                     // Set Performance mode first
                     _logging?.Info("Applying Max fan preset: Setting Performance mode...");
-                    _wmiBios.SetFanMode(HpWmiBios.FanMode.Performance);
-                    _lastMode = HpWmiBios.FanMode.Performance;
+                    HpWmiBios.FanMode maxFanMode = ApplyV0MappingIfNecessary(HpWmiBios.FanMode.Performance);
+                    _wmiBios.SetFanMode(maxFanMode);
+                    _lastMode = maxFanMode;
                     
                     // Start countdown extension to keep fan settings active
                     StartCountdownExtension();
@@ -548,6 +549,16 @@ namespace OmenCore.Hardware
                     // model-specific max fan level (for example 63 on OMEN 16-xd0xxx).
                     if (percent >= 100)
                     {
+                        if (!_isMaxModeActive)
+                        {
+                            HpWmiBios.FanMode perfMode = ApplyV0MappingIfNecessary(HpWmiBios.FanMode.Performance);
+                            if (_lastMode != perfMode)
+                            {
+                                _logging?.Info($"Elevating Thermal Profile to {perfMode} to unlock hardware Max Fan limits...");
+                                _wmiBios.SetFanMode(perfMode);
+                            }
+                        }
+
                         success = _wmiBios.SetFanMax(true);
                         if (success)
                         {
@@ -576,6 +587,13 @@ namespace OmenCore.Hardware
                         if (_isMaxModeActive)
                         {
                             _wmiBios.SetFanMax(false);
+                            
+                            HpWmiBios.FanMode perfMode = ApplyV0MappingIfNecessary(HpWmiBios.FanMode.Performance);
+                            if (_lastMode != perfMode)
+                            {
+                                _logging?.Info($"Restoring Thermal Profile to {_lastMode} after dropping below 100% fan speed...");
+                                _wmiBios.SetFanMode(_lastMode);
+                            }
                         }
                         
                         // Convert percentage to fan level
@@ -675,6 +693,16 @@ namespace OmenCore.Hardware
                 // If either fan is at 100%, use SetFanMax for true maximum (crucial for single-fan laptops like Victus)
                 if (cpuPercent >= 100 || gpuPercent >= 100)
                 {
+                    if (!_isMaxModeActive)
+                    {
+                        HpWmiBios.FanMode perfMode = ApplyV0MappingIfNecessary(HpWmiBios.FanMode.Performance);
+                        if (_lastMode != perfMode)
+                        {
+                            _logging?.Info($"Elevating Thermal Profile to {perfMode} to unlock hardware Max Fan limits...");
+                            _wmiBios.SetFanMode(perfMode);
+                        }
+                    }
+
                     success = _wmiBios.SetFanMax(true);
                     if (success)
                     {
@@ -696,6 +724,13 @@ namespace OmenCore.Hardware
                     if (_isMaxModeActive)
                     {
                         _wmiBios.SetFanMax(false);
+                        
+                        HpWmiBios.FanMode perfMode = ApplyV0MappingIfNecessary(HpWmiBios.FanMode.Performance);
+                        if (_lastMode != perfMode)
+                        {
+                            _logging?.Info($"Restoring Thermal Profile to {_lastMode} after dropping below 100% fan speed...");
+                            _wmiBios.SetFanMode(_lastMode);
+                        }
                     }
 
                     // 0% is allowed as an explicit user intent (0 RPM mode).
@@ -805,6 +840,8 @@ namespace OmenCore.Hardware
             {
                 fanMode = HpWmiBios.FanMode.Default;
             }
+
+            fanMode = ApplyV0MappingIfNecessary(fanMode);
 
             if (_wmiBios.SetFanMode(fanMode))
             {
@@ -1472,20 +1509,25 @@ namespace OmenCore.Hardware
             // V0/Legacy systems use different command bytes (0x00-0x03) than V1+ systems (0x30/0x31/0x50).
             // Sending V1 bytes to V0 BIOS causes undefined behavior — e.g. Quiet (0x50) being 
             // interpreted as max performance, Transcend 14 2025 "Quiet = max fans" bug.
+            return ApplyV0MappingIfNecessary(baseMode);
+        }
+
+        private HpWmiBios.FanMode ApplyV0MappingIfNecessary(HpWmiBios.FanMode baseMode)
+        {
             if (_wmiBios.ThermalPolicy < HpWmiBios.ThermalPolicyVersion.V1)
             {
                 // V0/Legacy mapping
                 switch (baseMode)
                 {
                     case HpWmiBios.FanMode.Performance:
-                        _logging?.Debug("MapPresetToFanMode: Legacy V0 → LegacyPerformance (0x01)");
+                        _logging?.Debug("ApplyV0MappingIfNecessary: Legacy V0 → LegacyPerformance (0x01)");
                         return HpWmiBios.FanMode.LegacyPerformance;
                     case HpWmiBios.FanMode.Cool:
-                        _logging?.Debug("MapPresetToFanMode: Legacy V0 → LegacyCool (0x02)");
+                        _logging?.Debug("ApplyV0MappingIfNecessary: Legacy V0 → LegacyCool (0x02)");
                         return HpWmiBios.FanMode.LegacyCool;
                     case HpWmiBios.FanMode.Default:
                     default:
-                        _logging?.Debug("MapPresetToFanMode: Legacy V0 → LegacyDefault (0x00)");
+                        _logging?.Debug("ApplyV0MappingIfNecessary: Legacy V0 → LegacyDefault (0x00)");
                         return HpWmiBios.FanMode.LegacyDefault;
                 }
             }

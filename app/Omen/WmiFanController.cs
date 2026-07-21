@@ -529,6 +529,13 @@ namespace OmenCore.Hardware
 
             percent = Math.Clamp(percent, 0, 100);
 
+            // Enforce minimum stable PWM for V2 laptops
+            // V2 systems can become unstable (fans pulsing on/off) at very low non-zero percentages
+            if (_maxFanLevel == 100 && percent > 0 && percent < 20)
+            {
+                percent = 20;
+            }
+
             if (IsManualControlActive && _lastManualCpuPercent == percent && _lastManualGpuPercent == percent)
             {
                 // Avoid spamming the WMI interface if the requested speed hasn't changed.
@@ -694,6 +701,20 @@ namespace OmenCore.Hardware
 
             cpuPercent = Math.Clamp(cpuPercent, 0, 100);
             gpuPercent = Math.Clamp(gpuPercent, 0, 100);
+
+            // Enforce minimum stable PWM for V2 laptops
+            // V2 systems can become unstable (fans pulsing on/off) at very low non-zero percentages
+            if (_maxFanLevel == 100)
+            {
+                if (cpuPercent > 0 && cpuPercent < 20) cpuPercent = 20;
+                if (gpuPercent > 0 && gpuPercent < 20) gpuPercent = 20;
+            }
+
+            if (IsManualControlActive && _lastManualCpuPercent == cpuPercent && _lastManualGpuPercent == gpuPercent)
+            {
+                // Avoid spamming WMI if the percentage hasn't changed to prevent BIOS reversion bugs
+                return true;
+            }
 
             // NOTE: 0% is allowed as an explicit user request (0 RPM / fans stopped).
             // The keepalive timer will continuously re-send SetFanLevel(0,0) to prevent

@@ -308,7 +308,7 @@ namespace OmenCore.Hardware
         /// <summary>
         /// Try a series of heartbeat queries to "wake up" the WMI interface on 2023+ models.
         /// </summary>
-        private bool TryHeartbeatSequence()
+        public bool TryHeartbeatSequence()
         {
             // Send multiple heartbeat queries with small delays
             for (int i = 0; i < 3; i++)
@@ -351,7 +351,7 @@ namespace OmenCore.Hardware
                 if (_sharedInstance == null)
                 {
                     _sharedInstance = this;
-                    _heartbeatTimer = new System.Threading.Timer(HeartbeatCallback, null, HeartbeatIntervalMs, HeartbeatIntervalMs);
+                    _heartbeatTimer = new System.Threading.Timer(HeartbeatCallback, null, 0, HeartbeatIntervalMs);
                     _heartbeatEnabled = true;
                     _logging?.Info($"✓ WMI BIOS heartbeat started (every {HeartbeatIntervalMs/1000}s)");
                 }
@@ -530,12 +530,19 @@ namespace OmenCore.Hardware
         {
             try
             {
-                // User override takes priority (if set to a valid value > 0)
+                // User override takes priority (if set to a valid value > 0), except on V2
                 if (userOverride > 0 && userOverride <= 100)
                 {
-                    MaxFanLevel = userOverride;
-                    _logging?.Info($"Max fan level set to {MaxFanLevel} (user override)");
-                    return;
+                    if (ThermalPolicy < ThermalPolicyVersion.V2)
+                    {
+                        MaxFanLevel = userOverride;
+                        _logging?.Info($"Max fan level set to {MaxFanLevel} (user override)");
+                        return;
+                    }
+                    else
+                    {
+                        _logging?.Info($"Ignoring user override {userOverride} for V2+ ThermalPolicy to prevent hardware capping issues.");
+                    }
                 }
 
                 // Model database override (only when explicitly defined)
@@ -562,13 +569,11 @@ namespace OmenCore.Hardware
                 // positives when OMEN Gaming Hub was running and had set fans to elevated levels,
                 // leading to the "RPM glitch" where fans showed inflated values (e.g. 7600 RPM).
 
-                // V2 thermal policy (OMEN Max 2025+) — still uses 0-56 krpm hardware range.
-                // Sending 100 causes out-of-bounds WMI commands, firmware glitching, and
-                // incorrectly reported RPM values (7600 RPM+). Matches HP's NotebookV2 path.
+                // V2 thermal policy (OMEN Max 2025+) uses percentage-based WMI fan control range (0-100).
                 if (ThermalPolicy >= ThermalPolicyVersion.V2)
                 {
-                    MaxFanLevel = 56;
-                    _logging?.Info($"Max fan level set to {MaxFanLevel} (Laptop, ThermalPolicy V2+)");
+                    MaxFanLevel = 100;
+                    _logging?.Info($"Max fan level set to {MaxFanLevel} (Laptop, ThermalPolicy V2+ percentage scale)");
                     return;
                 }
 

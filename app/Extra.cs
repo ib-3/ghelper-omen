@@ -446,6 +446,80 @@ namespace GHelper
                 AppConfig.Set("omen_turbo_is_max", checkOmenMax.Checked ? 1 : 0);
             };
 
+            bool isOmen = AppConfig.IsOmen();
+            comboOmenFanControl.Visible = isOmen;
+            labelOmenFanControl.Visible = isOmen;
+            panelOmenMaxRPM.Visible = isOmen && (Program.acpi?.IsOmenV2() != true);
+            
+            if (isOmen)
+            {
+                // Force legacy users back to 0 (WMI) just in case
+                AppConfig.Set("omen_fan_control_mode", 0);
+                
+                // Make the panel visible to all users, even on V2, so they can
+                // manually specify the hardware limits (since some V2 use krpm)
+                panelOmenMaxRPM.Visible = true;
+                
+                // Hide combo as only WMI is supported now
+                comboOmenFanControl.Visible = false;
+                labelOmenFanControl.Visible = false;
+
+                {
+                    int maxFanLevel = AppConfig.Get("omen_max_fan_level", 0);
+                    numericOmenMaxRPM.Value = maxFanLevel <= 0 ? 6000 : maxFanLevel * 100;
+                    numericOmenMaxRPM.ValueChanged += (s, e) =>
+                    {
+                        AppConfig.Set("omen_max_fan_level", (int)(numericOmenMaxRPM.Value / 100));
+                        if (Program.settingsForm?.fansForm != null && !Program.settingsForm.fansForm.IsDisposed)
+                        {
+                            Program.settingsForm.fansForm.InitAxis();
+                        }
+                    };
+                    
+                    Button testButton = new Button();
+                    testButton.Text = "RUN FAN TEST NOW";
+                    testButton.BackColor = System.Drawing.Color.Red;
+                    testButton.ForeColor = System.Drawing.Color.White;
+                    testButton.Font = new System.Drawing.Font(testButton.Font, System.Drawing.FontStyle.Bold);
+                    testButton.AutoSize = true;
+                    testButton.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+                    testButton.Location = new System.Drawing.Point(numericOmenMaxRPM.Left - 180, numericOmenMaxRPM.Top);
+                    panelOmenMaxRPM.Controls.Add(testButton);
+                    
+                    labelOmenMaxRPM.Text = "TEST BUILD: Max Fan Speed";
+                    
+                    testButton.Click += async (s, e) =>
+                    {
+                        testButton.Enabled = false;
+                        var speeds = new int[] { 40, 70, 100, 70, 40, 0 };
+                        foreach (var spd in speeds)
+                        {
+                            testButton.Text = $"Testing {spd}%...";
+                            Program.OmenFans?.SetFanSpeeds(spd, spd);
+                            await System.Threading.Tasks.Task.Delay(4000);
+                            
+                            var rpms = Program.OmenFans?.ReadFanSpeeds();
+                            string rpmText = "";
+                            if (rpms != null)
+                            {
+                                foreach (var r in rpms) 
+                                {
+                                    rpmText += r.SpeedRpm + "/";
+                                }
+                                rpmText = rpmText.TrimEnd('/');
+                            }
+                            
+                            testButton.Text = $"Testing {spd}% -> {(rpmText.Length > 0 ? rpmText + " RPM" : "No RPM")}";
+                            await System.Threading.Tasks.Task.Delay(2000);
+                        }
+                        
+                        Program.OmenFans?.RestoreAutoControl();
+                        testButton.Text = "Run Fan Test";
+                        testButton.Enabled = true;
+                    };
+                }
+            }
+
             int bootSound = Program.acpi.DeviceGet(AsusACPI.BootSound);
             if (bootSound < 0 || bootSound > UInt16.MaxValue) bootSound = AppConfig.Get("boot_sound", 0);
 

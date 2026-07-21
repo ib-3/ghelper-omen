@@ -122,6 +122,11 @@ namespace GHelper
             checkStatusLed = new CheckBox();
             checkAspm = new CheckBox();
             checkOmenMax = new CheckBox();
+            comboOmenFanControl = new RComboBox();
+            labelOmenFanControl = new Label();
+            panelOmenMaxRPM = new Panel();
+            numericOmenMaxRPM = new NumericUpDownWithUnit();
+            labelOmenMaxRPM = new Label();
             checkDonate = new CheckBox();
             panelPower = new Panel();
             numericHibernateAfter = new NumericUpDownWithUnit();
@@ -170,6 +175,8 @@ namespace GHelper
             panelSettings.SuspendLayout();
             panelPower.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)numericHibernateAfter).BeginInit();
+            panelOmenMaxRPM.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)numericOmenMaxRPM).BeginInit();
             ((System.ComponentModel.ISupportInitialize)pictureHibernate).BeginInit();
             panelAPU.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)pictureAPUMem).BeginInit();
@@ -1205,6 +1212,9 @@ namespace GHelper
             panelSettings.Controls.Add(checkNVPlatform);
             panelSettings.Controls.Add(checkStatusLed);
             panelSettings.Controls.Add(checkAspm);
+            panelSettings.Controls.Add(panelOmenMaxRPM);
+            panelSettings.Controls.Add(comboOmenFanControl);
+            panelSettings.Controls.Add(labelOmenFanControl);
             panelSettings.Controls.Add(checkOmenMax);
             panelSettings.Controls.Add(checkDonate);
             panelSettings.Dock = DockStyle.Top;
@@ -1329,6 +1339,65 @@ namespace GHelper
             checkOmenMax.TabIndex = 2;
             checkOmenMax.Text = "Omen: Replace Turbo with Max Fan Mode (turn off custom curve)";
             checkOmenMax.UseVisualStyleBackColor = true;
+            // 
+            // labelOmenFanControl
+            // 
+            labelOmenFanControl.AutoSize = true;
+            labelOmenFanControl.Dock = DockStyle.Top;
+            labelOmenFanControl.Location = new Point(21, 284);
+            labelOmenFanControl.Margin = new Padding(5, 3, 5, 3);
+            labelOmenFanControl.Name = "labelOmenFanControl";
+            labelOmenFanControl.Padding = new Padding(3);
+            labelOmenFanControl.Size = new Size(917, 42);
+            labelOmenFanControl.TabIndex = 3;
+            labelOmenFanControl.Text = "Omen: Fan Control Mode";
+            // 
+            // comboOmenFanControl
+            // 
+            comboOmenFanControl.Dock = DockStyle.Top;
+            comboOmenFanControl.DropDownStyle = ComboBoxStyle.DropDownList;
+            comboOmenFanControl.FormattingEnabled = true;
+            comboOmenFanControl.Location = new Point(21, 326);
+            comboOmenFanControl.Margin = new Padding(5);
+            comboOmenFanControl.Name = "comboOmenFanControl";
+            comboOmenFanControl.Size = new Size(917, 33);
+            comboOmenFanControl.TabIndex = 4;
+            // 
+            // panelOmenMaxRPM
+            // 
+            panelOmenMaxRPM.Controls.Add(numericOmenMaxRPM);
+            panelOmenMaxRPM.Controls.Add(labelOmenMaxRPM);
+            panelOmenMaxRPM.Dock = DockStyle.Top;
+            panelOmenMaxRPM.Location = new Point(21, 359);
+            panelOmenMaxRPM.Margin = new Padding(5, 3, 5, 3);
+            panelOmenMaxRPM.Name = "panelOmenMaxRPM";
+            panelOmenMaxRPM.Size = new Size(917, 50);
+            panelOmenMaxRPM.TabIndex = 5;
+            // 
+            // numericOmenMaxRPM
+            // 
+            numericOmenMaxRPM.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            numericOmenMaxRPM.Increment = new decimal(new int[] { 100, 0, 0, 0 });
+            numericOmenMaxRPM.Location = new Point(715, 5);
+            numericOmenMaxRPM.Margin = new Padding(5, 3, 5, 3);
+            numericOmenMaxRPM.Maximum = new decimal(new int[] { 8000, 0, 0, 0 });
+            numericOmenMaxRPM.Minimum = new decimal(new int[] { 1000, 0, 0, 0 });
+            numericOmenMaxRPM.Name = "numericOmenMaxRPM";
+            numericOmenMaxRPM.Size = new Size(202, 39);
+            numericOmenMaxRPM.TabIndex = 1;
+            numericOmenMaxRPM.Unit = "RPM";
+            numericOmenMaxRPM.UnitFirst = false;
+            numericOmenMaxRPM.Value = new decimal(new int[] { 5500, 0, 0, 0 });
+            // 
+            // labelOmenMaxRPM
+            // 
+            labelOmenMaxRPM.AutoSize = true;
+            labelOmenMaxRPM.Location = new Point(0, 10);
+            labelOmenMaxRPM.Margin = new Padding(5, 0, 5, 0);
+            labelOmenMaxRPM.Name = "labelOmenMaxRPM";
+            labelOmenMaxRPM.Size = new Size(200, 32);
+            labelOmenMaxRPM.TabIndex = 0;
+            labelOmenMaxRPM.Text = "Omen: Max Fan Speed";
             //
             // checkNVPlatform
             // 
@@ -1829,6 +1898,11 @@ namespace GHelper
         private CheckBox checkGpuApps;
         private CheckBox checkDonate;
         private CheckBox checkOmenMax;
+        private RComboBox comboOmenFanControl;
+        private Label labelOmenFanControl;
+        private Panel panelOmenMaxRPM;
+        private NumericUpDownWithUnit numericOmenMaxRPM;
+        private Label labelOmenMaxRPM;
         private PictureBox pictureBacklight;
         private Label labelBacklightTitle;
         private PictureBox pictureService;

@@ -1,0 +1,943 @@
+diff --git a/app/AsusACPI.cs b/app/AsusACPI.cs
+--- a/app/AsusACPI.cs
++++ b/app/AsusACPI.cs
+@@ -25,8 +25,11 @@ internal sealed class OmenBackend : IDisposable
+     // ====================================================================================================
+ 
+     private readonly LoggingService _logging;
+-    private readonly HpWmiBios _bios;
+-    private readonly IFanController _fans;
++    // Nullable: HpWmiBios construction can fail (e.g. CIM access denied) and TryCreate
++    // defends in depth — accesses must be null-safe.
++    private readonly HpWmiBios? _bios;
++    // Nullable: both WMI and EC fan controllers can fail to initialize.
++    private readonly IFanController? _fans;
+     private readonly WmiBiosMonitor? _monitor; // [NEW] High-precision monitor
+     private readonly IMsrAccess? _msrAccess;
+     private readonly byte[][] _curves = new byte[2][];
+@@ -36,7 +39,7 @@ internal sealed class OmenBackend : IDisposable
+     private int _lastEvaluatedGpuPercent = -1;
+ 
+     // [MODIFIED] Constructor now accepts WmiBiosMonitor
+-    private OmenBackend(LoggingService logging, HpWmiBios bios, IFanController fans, WmiBiosMonitor monitor, IMsrAccess? msrAccess)
++    private OmenBackend(LoggingService logging, HpWmiBios? bios, IFanController? fans, WmiBiosMonitor? monitor, IMsrAccess? msrAccess)
+     {
+         _logging = logging;
+         _bios = bios;
+@@ -96,8 +99,8 @@ internal sealed class OmenBackend : IDisposable
+     }
+     */
+ 
+-    public bool IsAvailable => _bios.IsAvailable || _fans.IsAvailable;
+-    private bool HasCpuPowerLimitControl => !CpuInfo.IsAMD && (_bios.IsAvailable || _msrAccess?.IsAvailable == true);
++    public bool IsAvailable => (_bios?.IsAvailable ?? false) || (_fans?.IsAvailable ?? false);
++    private bool HasCpuPowerLimitControl => !CpuInfo.IsAMD && ((_bios?.IsAvailable ?? false) || _msrAccess?.IsAvailable == true);
+ 
+     // ── Lighting ──────────────────────────────────────────────────────────
+     private OmenCore.Hardware.OmenLightingService? _lightingService;
+@@ -108,7 +111,7 @@ internal sealed class OmenBackend : IDisposable
+     /// </summary>
+     public OmenCore.Hardware.OmenLightingService? GetLightingService()
+     {
+-        if (!_bios.IsAvailable) return null;
++        if (_bios == null || !_bios.IsAvailable) return null;
+         if (_lightingService == null)
+         {
+             _lightingService = new OmenCore.Hardware.OmenLightingService(_bios, _logging);
+@@ -121,44 +124,101 @@ internal sealed class OmenBackend : IDisposable
+     {
+         if (!IsHpOmenSystem()) return null;
+ 
++        LoggingService? logging = null;
++        HpWmiBios? bios = null;
++        IFanController? fans = null;
++        IMsrAccess? msrAccess = null;
++        NvapiService? nvapi = null;
++        WmiBiosMonitor? monitor = null;
++
+         try
+         {
+-            var logging = new LoggingService();
++            logging = new LoggingService();
+             logging.Initialize();
+             logging.LogEmitted += Logger.WriteLine;
+ 
+-            var bios = new HpWmiBios(logging);
+-            
+-            var wmiFans = new WmiFanController(null, logging, injectedWmiBios: bios);
+-            IFanController fans = new OmenCore.Hardware.WmiFanControllerWrapper(wmiFans, logging);
+-            if (!wmiFans.IsAvailable)
++            try
+             {
+-                var ecAccess = OmenCore.Hardware.EcAccessFactory.GetEcAccess();
+-                var registerMap = new System.Collections.Generic.Dictionary<string, int>();
+-                var baseController = new OmenCore.Hardware.FanController(ecAccess, registerMap, null, logging, bios);
+-                fans = new OmenCore.Hardware.EcFanControllerWrapper(baseController, null, logging);
+-                Logger.WriteLine("OMEN backend: WMI Fan Controller not available. Falling back to Legacy EC Fan Controller.");
++                bios = new HpWmiBios(logging);
+             }
+-            
+-            var msrAccess = MsrAccessFactory.Create(logging);
+-
+-            // [NEW] Initialize high-precision monitor components
+-            var nvapi = new NvapiService(logging);
+-            var monitor = new WmiBiosMonitor(logging, nvapi);
+-
+-            Logger.WriteLine($"OMEN backend: BIOS={bios.Status}, Fans={fans.Status}, MSR={MsrAccessFactory.StatusMessage}, Monitor={monitor.MonitoringSource}");
+-            
+-            // [MODIFIED] Return backend with monitor
+-            return new OmenBackend(logging, bios, fans, monitor, msrAccess);
+-
+-            /* [LEGACY TRYCREATE RETURN]
+-            Logger.WriteLine($"OMEN backend: BIOS={bios.Status}, Fans={fans.Status}, MSR={MsrAccessFactory.StatusMessage}");
+-            return new OmenBackend(logging, bios, fans, msrAccess);
+-            */
++            catch (Exception ex)
++            {
++                // HpWmiBios.Initialize() should swallow its own exceptions, but defend in depth.
++                Logger.WriteLine($"OMEN backend: HpWmiBios construction threw: {ex.GetType().Name}: {ex.Message}");
++                bios = null;
++            }
++
++            try
++            {
++                var wmiFans = new WmiFanController(null, logging, injectedWmiBios: bios);
++                fans = new OmenCore.Hardware.WmiFanControllerWrapper(wmiFans, logging);
++                if (!wmiFans.IsAvailable)
++                {
++                    // EC fallback — EcAccessFactory.GetEcAccess() returns null when no backend
++                    // (PawnIO/WinRing0) is installed. FanController is null-safe for this case.
++                    var ecAccess = OmenCore.Hardware.EcAccessFactory.GetEcAccess();
++                    var registerMap = new System.Collections.Generic.Dictionary<string, int>();
++                    var baseController = new OmenCore.Hardware.FanController(ecAccess, registerMap, null, logging, bios);
++                    fans = new OmenCore.Hardware.EcFanControllerWrapper(baseController, null, logging);
++                    Logger.WriteLine($"OMEN backend: WMI Fan Controller not available. Falling back to Legacy EC Fan Controller (EC access: {(ecAccess?.IsAvailable == true ? "available" : "unavailable — no PawnIO/WinRing0")}).");
++                }
++            }
++            catch (Exception ex)
++            {
++                Logger.WriteLine($"OMEN backend: Fan controller init failed: {ex.GetType().Name}: {ex.Message}");
++                Logger.WriteLine($"OMEN backend: Fan controller stack: {ex.StackTrace}");
++                fans = null;
++            }
++
++            try
++            {
++                msrAccess = MsrAccessFactory.Create(logging);
++            }
++            catch (Exception ex)
++            {
++                Logger.WriteLine($"OMEN backend: MSR access init failed: {ex.GetType().Name}: {ex.Message}");
++                msrAccess = null;
++            }
++
++            try
++            {
++                nvapi = new NvapiService(logging);
++            }
++            catch (Exception ex)
++            {
++                Logger.WriteLine($"OMEN backend: NvapiService init failed: {ex.GetType().Name}: {ex.Message}");
++                nvapi = null;
++            }
++
++            try
++            {
++                monitor = new WmiBiosMonitor(logging, nvapi);
++            }
++            catch (Exception ex)
++            {
++                Logger.WriteLine($"OMEN backend: WmiBiosMonitor init failed: {ex.GetType().Name}: {ex.Message}");
++                Logger.WriteLine($"OMEN backend: WmiBiosMonitor stack: {ex.StackTrace}");
++                monitor = null;
++            }
++
++            Logger.WriteLine($"OMEN backend: BIOS={bios?.Status ?? "null"}, Fans={fans?.Status ?? "null"}, MSR={MsrAccessFactory.StatusMessage}, Monitor={monitor?.MonitoringSource ?? "null"}");
++
++            // Even if some components are null, return a backend instance so telemetry
++            // paths that don't depend on those components can still work. The OmenBackend
++            // constructor and all downstream methods must be null-safe for these deps.
++            return new OmenBackend(logging, bios, fans, monitor, msrAccess);
+         }
+         catch (Exception ex)
+         {
+-            Logger.WriteLine($"OMEN backend init failed: {ex.Message}");
++            // Log full exception details so future init failures are diagnosable.
++            // The previous code only logged ex.Message, which gave "Object reference not set
++            // to an instance of an object." with zero context about where it threw.
++            Logger.WriteLine($"OMEN backend init failed: {ex.GetType().Name}: {ex.Message}");
++            Logger.WriteLine($"OMEN backend init stack trace: {ex.StackTrace}");
++            if (ex.InnerException != null)
++            {
++                Logger.WriteLine($"OMEN backend init inner: {ex.InnerException.GetType().Name}: {ex.InnerException.Message}");
++            }
+             return null;
+         }
+     }
+@@ -194,18 +254,18 @@ internal sealed class OmenBackend : IDisposable
+             AsusACPI.DevsCPUFan or AsusACPI.DevsGPUFan => IsAvailable,
+             AsusACPI.CPU_Fan or AsusACPI.GPU_Fan => IsAvailable,
+             AsusACPI.PerformanceMode => IsAvailable,
+-            AsusACPI.BatteryLimit => _bios.IsAvailable,
++            AsusACPI.BatteryLimit => _bios?.IsAvailable ?? false,
+             
+             // [MODIFIED] Temps now supported as long as either BIOS or Monitor is available
+             AsusACPI.Temp_CPU or AsusACPI.Temp_GPU => IsAvailable,
+             /* [LEGACY SUPPORT] 
+-            AsusACPI.Temp_CPU or AsusACPI.Temp_GPU => _bios.IsAvailable, 
++            AsusACPI.Temp_CPU or AsusACPI.Temp_GPU => _bios?.IsAvailable ?? false, 
+             */
+             
+-            AsusACPI.GPUEcoROG or AsusACPI.GPUEcoVivo => _bios.IsAvailable, // OMEN has Optimus (iGPU-only) mode
+-            AsusACPI.GPUMuxROG or AsusACPI.GPUMuxVivo => _bios.IsAvailable, // Hybrid/Discrete MUX
+-            AsusACPI.GPU_POWER => _bios.IsAvailable,
+-            AsusACPI.PPT_GPUC0 => _bios.IsAvailable, // Dynamic Boost
++            AsusACPI.GPUEcoROG or AsusACPI.GPUEcoVivo => _bios?.IsAvailable ?? false, // OMEN has Optimus (iGPU-only) mode
++            AsusACPI.GPUMuxROG or AsusACPI.GPUMuxVivo => _bios?.IsAvailable ?? false, // Hybrid/Discrete MUX
++            AsusACPI.GPU_POWER => _bios?.IsAvailable ?? false,
++            AsusACPI.PPT_GPUC0 => _bios?.IsAvailable ?? false, // Dynamic Boost
+             AsusACPI.PPT_APUA0 or AsusACPI.PPT_APUA3 or AsusACPI.PPT_APUC1 => HasCpuPowerLimitControl,
+             _ => false
+         };
+@@ -226,14 +286,14 @@ internal sealed class OmenBackend : IDisposable
+                 _ => "Balanced"
+             };
+ 
+-            result = _fans.SetPerformanceMode(mode) ? 1 : -1;
++            result = (_fans?.SetPerformanceMode(mode) ?? false) ? 1 : -1;
+             Logger.WriteLine($"{logName ?? "OmenMode"} = {mode} : {(result == 1 ? "OK" : result)}");
+             return true;
+         }
+ 
+         if (deviceId == AsusACPI.BatteryLimit)
+         {
+-            result = _bios.SetBatteryCareMode(status < 100) ? 1 : -1;
++            result = (_bios?.SetBatteryCareMode(status < 100) ?? false) ? 1 : -1;
+             Logger.WriteLine($"{logName ?? "OmenBatteryLimit"} = {(status < 100 ? "80%" : "100%")} : {(result == 1 ? "OK" : result)}");
+             return true;
+         }
+@@ -242,7 +302,7 @@ internal sealed class OmenBackend : IDisposable
+         if (deviceId == AsusACPI.GPUMuxROG || deviceId == AsusACPI.GPUMuxVivo)
+         {
+             var targetMode = status == 0 ? HpWmiBios.GpuMode.Discrete : HpWmiBios.GpuMode.Hybrid;
+-            result = _bios.SetGpuMode(targetMode) ? 1 : -1;
++            result = (_bios?.SetGpuMode(targetMode) ?? false) ? 1 : -1;
+             Logger.WriteLine($"{logName ?? "OmenGpuMux"} = {targetMode} : {(result == 1 ? "OK" : result)}");
+             return true;
+         }
+@@ -259,7 +319,7 @@ internal sealed class OmenBackend : IDisposable
+             else if (powerTarget <= 10) 
+                 level = HpWmiBios.GpuPowerLevel.Minimum; // Standard TGP
+ 
+-            result = _bios.SetGpuPower(level) ? 1 : -1;
++            result = (_bios?.SetGpuPower(level) ?? false) ? 1 : -1;
+             Logger.WriteLine($"{logName ?? (deviceId == AsusACPI.GPU_POWER ? "OmenGpuPower" : "OmenDynamicBoost")} = {level} (TGP:{powerTarget}W Boost:{dynamicBoost}W) : {(result == 1 ? "OK" : result)}");
+             return true;
+         }
+@@ -289,7 +349,7 @@ internal sealed class OmenBackend : IDisposable
+     public bool TrySetGpuEco(int eco, out int result)
+     {
+         result = -1;
+-        if (!_bios.IsAvailable) return false;
++        if (_bios == null || !_bios.IsAvailable) return false;
+         // eco=1 → iGPU-only (Optimus), eco=0 → Hybrid (both GPUs)
+         var targetMode = eco == 1 ? HpWmiBios.GpuMode.Optimus : HpWmiBios.GpuMode.Hybrid;
+         result = _bios.SetGpuMode(targetMode) ? 1 : -1;
+@@ -311,34 +371,44 @@ internal sealed class OmenBackend : IDisposable
+             {
+                 try
+                 {
+-                    // Use the high-precision monitor which handles ACPI thermal zones and LHM fallbacks
+-                    var sample = Task.Run(() => _monitor.ReadSampleAsync(default)).GetAwaiter().GetResult();
+-                    double temp = (deviceId == AsusACPI.Temp_CPU) ? sample.CpuTemperatureC : sample.GpuTemperatureC;
+-                    if (temp > 0)
++                    if (_monitor == null)
+                     {
+-                        result = (int)Math.Round(temp);
+-                        return true;
++                        Logger.WriteLine("[OmenBackend.TryDeviceGet] Temp requested but WmiBiosMonitor is null — falling back to BIOS temp.");
++                    }
++                    else
++                    {
++                        // Use the high-precision monitor which handles ACPI thermal zones and LHM fallbacks
++                        var sample = Task.Run(() => _monitor.ReadSampleAsync(default)).GetAwaiter().GetResult();
++                        double temp = (deviceId == AsusACPI.Temp_CPU) ? sample.CpuTemperatureC : sample.GpuTemperatureC;
++                        if (temp > 0)
++                        {
++                            result = (int)Math.Round(temp);
++                            return true;
++                        }
+                     }
+                 }
+-                catch { }
++                catch (Exception ex)
++                {
++                    Logger.WriteLine($"[OmenBackend.TryDeviceGet] Monitor.ReadSampleAsync failed: {ex.GetType().Name}: {ex.Message}");
++                }
+             }
+         }
+ 
+         result = deviceId switch
+         {
+             AsusACPI.PerformanceMode => 0,
+-            AsusACPI.BatteryLimit => (_bios.GetBatteryCareMode() ?? false) ? 80 : 100,
++            AsusACPI.BatteryLimit => (_bios?.GetBatteryCareMode() ?? false) ? 80 : 100,
+             AsusACPI.CPU_Fan => ReadFanRpm(cpu: true),
+             AsusACPI.GPU_Fan => ReadFanRpm(cpu: false),
+             AsusACPI.DevsCPUFanCurve or AsusACPI.DevsGPUFanCurve => IsAvailable ? 1 : -1,
+             AsusACPI.DevsCPUFan or AsusACPI.DevsGPUFan => IsAvailable ? 1 : -1,
+             
+             // [MODIFIED] High-precision path above intercepting; switched to legacy fallbacks here
+-            AsusACPI.Temp_CPU => (int)(_bios.GetTemperature() ?? -1),
+-            AsusACPI.Temp_GPU => (int)(_bios.GetGpuTemperature() ?? -1),
++            AsusACPI.Temp_CPU => (int)(_bios?.GetTemperature() ?? -1),
++            AsusACPI.Temp_GPU => (int)(_bios?.GetGpuTemperature() ?? -1),
+             /* [LEGACY GET]
+-            AsusACPI.Temp_CPU => (int)(_bios.GetTemperature() ?? -1),
+-            AsusACPI.Temp_GPU => (int)(_bios.GetGpuTemperature() ?? -1),
++            AsusACPI.Temp_CPU => (int)(_bios?.GetTemperature() ?? -1),
++            AsusACPI.Temp_GPU => (int)(_bios?.GetGpuTemperature() ?? -1),
+             */
+ 
+             // GPUEco: 1 = currently in Optimus/iGPU-only mode, 0 = not in eco mode
+@@ -358,7 +428,7 @@ private int ReadGpuEcoFlag()
+     {
+         try
+         {
+-            var mode = _bios.GetGpuMode();
++            var mode = _bios?.GetGpuMode();
+             if (mode.HasValue)
+                 return mode.Value == HpWmiBios.GpuMode.Optimus ? 1 : 0;
+         }
+@@ -370,7 +440,7 @@ private int ReadGpuMuxFlag()
+     {
+         try
+         {
+-            var mode = _bios.GetGpuMode();
++            var mode = _bios?.GetGpuMode();
+             if (mode.HasValue)
+                 // Discrete = Ultimate (mux=0), Hybrid/Optimus = Standard (mux=1)
+                 return mode.Value == HpWmiBios.GpuMode.Discrete ? 0 : 1;
+@@ -383,7 +453,7 @@ private int ReadGpuPowerFlag()
+     {
+         try
+         {
+-            var power = _bios.GetGpuPower();
++            var power = _bios?.GetGpuPower();
+             if (power.HasValue)
+             {
+                 // Map back to a UI wattage slider approximation
+@@ -432,7 +502,7 @@ private bool SetCpuPowerLimit(uint deviceId, int watts)
+         bool msrSuccess = false;
+         
+         // 1. Primary: OMEN WMI Native Command
+-        if (_bios.IsAvailable)
++        if (_bios?.IsAvailable == true)
+         {
+             wmiSuccess = _bios.SetCpuPowerLimit(pl1, pl2);
+             if (wmiSuccess)
+@@ -512,13 +582,17 @@ private bool SetCpuPowerLimit(uint deviceId, int watts)
+     public double GetCpuPackagePowerWatts()
+     {
+         double power = 0.0;
+-        
+-        try
++
++        // Primary: high-precision monitor (WmiBiosMonitor). May be null if init failed.
++        if (_monitor != null)
+         {
+-            var sample = Task.Run(() => _monitor.ReadSampleAsync(default)).GetAwaiter().GetResult();
+-            power = sample.CpuPowerWatts;
++            try
++            {
++                var sample = Task.Run(() => _monitor.ReadSampleAsync(default)).GetAwaiter().GetResult();
++                power = sample.CpuPowerWatts;
++            }
++            catch { }
+         }
+-        catch { }
+ 
+         if (power > 0.0)
+             return power;
+@@ -620,7 +694,7 @@ public bool TrySetFanCurve(AsusFan device, byte[] curve, out int result)
+                 _ewmaCpuTemp = -1;
+                 _ewmaGpuTemp = -1;
+-                result = _fans.RestoreAutoControl() ? 1 : -1;
++                result = (_fans?.RestoreAutoControl() ?? false) ? 1 : -1;
+                 Logger.WriteLine($"OmenFanCurve: Restored BIOS Auto Control : {(result == 1 ? "OK" : result)}");
+             }
+             else
+@@ -632,8 +706,8 @@ public bool TrySetFanCurve(AsusFan device, byte[] curve, out int result)
+ 
+         _curves[(int)device] = curve.ToArray();
+ 
+-        int cpuTempRaw = (int)(HardwareControl.GetCPUTemp() ?? _bios.GetTemperature() ?? 0);
+-        int gpuTempRaw = (int)(HardwareControl.GetGPUTemp() ?? _bios.GetGpuTemperature() ?? _bios.GetTemperature() ?? 0);
++        int cpuTempRaw = (int)(HardwareControl.GetCPUTemp() ?? _bios?.GetTemperature() ?? 0);
++        int gpuTempRaw = (int)(HardwareControl.GetGPUTemp() ?? _bios?.GetGpuTemperature() ?? _bios?.GetTemperature() ?? 0);
+ 
+         // HP's Lamda_Increase and Lamda_Decrease constants from SwFanControlCustomFanCurve
+         const double lamdaIncrease = 0.1;
+@@ -664,7 +738,7 @@ public bool TrySetFanCurve(AsusFan device, byte[] curve, out int result)
+         _lastEvaluatedCpuPercent = cpuPercent;
+         _lastEvaluatedGpuPercent = gpuPercent;
+ 
+-        result = _fans.SetFanSpeeds(cpuPercent, gpuPercent) ? 1 : -1;
++        result = (_fans?.SetFanSpeeds(cpuPercent, gpuPercent) ?? false) ? 1 : -1;
+         Logger.WriteLine($"OmenFanCurve {device}: CPU={cpuPercent}% GPU={gpuPercent}% (Temp {cpuTempRaw}C/{gpuTempRaw}C) : {(result == 1 ? "OK" : result)}");
+         return true;
+     }
+@@ -740,7 +814,7 @@ public bool VerifyCpuPowerLimitsWriteable()
+         if (!HasCpuPowerLimitControl) return false;
+ 
+         // If WMI is available, we assume the BIOS can write the limits natively
+-        if (_bios.IsAvailable) return true;
++        if (_bios?.IsAvailable == true) return true;
+         
+         if (_msrAccess == null) return false;
+ 
+@@ -771,9 +845,9 @@ public bool VerifyCpuPowerLimitsWriteable()
+ 
+     public void Dispose()
+     {
+-        _bios.Dispose();
+-        _fans.Dispose();
+-        _monitor.Dispose();
++        try { _monitor?.Dispose(); } catch { }
++        try { _fans?.Dispose(); } catch { }
++        try { _bios?.Dispose(); } catch { }
+     }
+ }
+diff --git a/app/HardwareControl.cs b/app/HardwareControl.cs
+--- a/app/HardwareControl.cs
++++ b/app/HardwareControl.cs
+@@ -477,53 +477,117 @@ public static class HardwareControl
+ 
+         // 2. Last-resort fallback: dynamic Performance Counter discovery.
+         //    Only used when the primary WMI path returns nothing valid.
+-        //    NOTE: Performance Counters on HP Omen often report a generic/ambient zone
+-        //    rather than the actual CPU package, so this is intentionally a fallback only.
++        //
++        //    IMPORTANT: On HP OMEN/Victus laptops, the ACPI thermal zones exposed via
++        //    Win32_PerfFormattedData_Counters_ThermalZoneInformation are almost never
++        //    named with CPU-like identifiers. On HP Ryzen systems (e.g. Ryzen 5 7640HS,
++        //    Victus 16-s0xxx, BIOS F.31), the CPU package zone is named "TSZ0" while
++        //    "TSZ2" is a skin/ambient sensor reporting a constant ~20°C. The previous
++        //    code's CPU-name filter (CPU/CPUZ/TZ00/PROC/Core/Package) does NOT match
++        //    "TSZ0", so we need a fallback: pick the hottest valid zone, since the CPU
++        //    is always the hottest active thermal zone on a running laptop.
+         if (cpuTemp == null || cpuTemp <= 0) try
+         {
+-            if (_cpuTempCounter == null)
++            // Enumerate all thermal zones once, then pick the best candidate.
++            // We don't cache the PerformanceCounter instance because the best zone
++            // may change between calls (e.g. right after boot TSZ0 might read 0).
++            double bestCpuLikeTemp = -1;
++            string? bestCpuLikeInstance = null;
++            double bestNonCpuLikeTemp = -1;
++            string? bestNonCpuLikeInstance = null;
++            bool anyZoneFound = false;
++
++            try
+             {
+-                string instanceName = @"\_TZ.THRM"; // default fallback
+-                try
++                var category = new PerformanceCounterCategory("Thermal Zone Information");
++                string[] instances = category.GetInstanceNames();
++                Logger.WriteLine($"[GetCPUTemp] PerfCounter instances found: [{string.Join(", ", instances)}]");
++
++                foreach (string inst in instances)
+                 {
+-                    var category = new PerformanceCounterCategory("Thermal Zone Information");
+-                    string[] instances = category.GetInstanceNames();
+-                    Logger.WriteLine($"[GetCPUTemp] PerfCounter instances found: [{string.Join(", ", instances)}]");
+-                    if (instances.Length > 0)
++                    try
+                     {
+-                        // Prefer instances containing "THRM", "TZ", or "CPU"
+-                        string? bestInstance = null;
+-                        foreach (string inst in instances)
++                        using var pc = new PerformanceCounter("Thermal Zone Information", "Temperature", inst, true);
++                        float rawKelvin = pc.NextValue();
++                        if (rawKelvin <= 0) continue; // dead/uninitialized zone
++
++                        float candidate = rawKelvin - 273;
++                        bool isCpuLike = inst.Contains("CPU", StringComparison.OrdinalIgnoreCase) ||
++                                         inst.Contains("CPUZ", StringComparison.OrdinalIgnoreCase) ||
++                                         inst.Contains("TZ00", StringComparison.OrdinalIgnoreCase) ||
++                                         inst.Contains("PROC", StringComparison.OrdinalIgnoreCase) ||
++                                         inst.Contains("Core", StringComparison.OrdinalIgnoreCase) ||
++                                         inst.Contains("Package", StringComparison.OrdinalIgnoreCase);
++
++                        Logger.WriteLine($"[GetCPUTemp] PerfCounter zone '{inst}': {candidate}°C (CpuLike={isCpuLike})");
++                        anyZoneFound = true;
++
++                        // Plausibility sanity check: real CPU package temp on a running laptop
++                        // is essentially always >= 25°C (idle Ryzen mobile sits around 35-50°C,
++                        // Intel mobile around 30-45°C). A reading of exactly 20°C or below is
++                        // either an uninitialized sensor, an ambient zone, or a sentinel value
++                        // from ACPI — never the real CPU temp.
++                        if (candidate < 25 || candidate >= 110)
+                         {
+-                            if (inst.Contains("THRM", StringComparison.OrdinalIgnoreCase) ||
+-                                inst.Contains("TZ", StringComparison.OrdinalIgnoreCase) ||
+-                                inst.Contains("CPU", StringComparison.OrdinalIgnoreCase))
++                            Logger.WriteLine($"[GetCPUTemp]   → rejected: out of plausible CPU range [25, 110]");
++                            continue;
++                        }
++
++                        if (isCpuLike)
++                        {
++                            if (candidate > bestCpuLikeTemp)
+                             {
+-                                bestInstance = inst;
+-                                break;
++                                bestCpuLikeTemp = candidate;
++                                bestCpuLikeInstance = inst;
++                            }
++                        }
++                        else
++                        {
++                            // Track hottest non-CPU-like zone — on HP Ryzen systems the CPU zone
++                            // is named "TSZ0" which doesn't match the CPU-like filter, so this
++                            // branch is what actually captures the real CPU temperature.
++                            if (candidate > bestNonCpuLikeTemp)
++                            {
++                                bestNonCpuLikeTemp = candidate;
++                                bestNonCpuLikeInstance = inst;
+                             }
+                         }
+-                        instanceName = bestInstance ?? instances[0];
++                    }
++                    catch (Exception ex)
++                    {
++                        Logger.WriteLine($"[GetCPUTemp] PerfCounter read failed for '{inst}': {ex.Message}");
+                     }
+                 }
+-                catch (Exception ex)
+-                {
+-                    Logger.WriteLine("Failed to dynamically find Thermal Zone instances: " + ex.Message);
+-                }
+-
+-                _cpuTempCounter = new PerformanceCounter("Thermal Zone Information", "Temperature", instanceName, true);
+-                Logger.WriteLine($"[GetCPUTemp] PerfCounter using instance: '{instanceName}'");
++            }
++            catch (Exception ex)
++            {
++                Logger.WriteLine("Failed to enumerate Thermal Zone instances: " + ex.Message);
+             }
+ 
+-            cpuTemp = _cpuTempCounter.NextValue() - 273;
+-            source = $"PerfCounter(fallback)";
++            // Prefer a CPU-named zone if we found one. Otherwise fall back to the hottest
++            // valid zone — the CPU is always hotter than ambient/skin sensors on a running laptop.
++            if (bestCpuLikeTemp > 0)
++            {
++                cpuTemp = bestCpuLikeTemp;
++                source = $"PerfCounter(CPU-like '{bestCpuLikeInstance}')";
++            }
++            else if (bestNonCpuLikeTemp > 0)
++            {
++                cpuTemp = bestNonCpuLikeTemp;
++                source = $"PerfCounter(hottest '{bestNonCpuLikeInstance}' — HP Ryzen fallback)";
++                Logger.WriteLine($"[GetCPUTemp] No CPU-named zone found — using hottest valid zone '{bestNonCpuLikeInstance}' ({bestNonCpuLikeTemp}°C) as CPU temp");
++            }
++            else if (anyZoneFound)
++            {
++                Logger.WriteLine("[GetCPUTemp] All PerfCounter zones reported invalid/out-of-range temperatures — no CPU temp available.");
++            }
+         }
+         catch (Exception)
+         {
+             //Debug.WriteLine("Failed reading CPU temp via Performance Counter: " + ex.Message);
+         }
+ 
+-        Logger.WriteLine($"[GetCPUTemp] RESULT: {cpuTemp}°C via {source}");
++        Logger.WriteLine($"[GetCPUTemp] RESULT: {(cpuTemp.HasValue ? $"{cpuTemp}°C" : "null")} via {source}");
+         return cpuTemp;
+     }
+ 
+diff --git a/app/Omen/AcpiThermalZoneTemperatureReader.cs b/app/Omen/AcpiThermalZoneTemperatureReader.cs
+--- a/app/Omen/AcpiThermalZoneTemperatureReader.cs
++++ b/app/Omen/AcpiThermalZoneTemperatureReader.cs
+@@ -83,28 +83,44 @@ namespace OmenCore.Hardware
+         /// IMPORTANT: On HP Omen laptops, this WMI class exposes multiple thermal zones
+         /// including chassis/skin zones (e.g. ~39°C) that are NOT the CPU package.
+         /// We must filter by instance name to avoid reading the wrong zone.
+-        /// If no CPU-like zone is found, return 0 to fall through to the ACPI/WMI BIOS path.
++        /// If no CPU-like zone is found, fall back to the hottest valid zone
++        /// (CPU is always the hottest active thermal zone on a running laptop).
+         /// </summary>
+         private static double ReadViaPerfCounter()
+         {
+             try
+             {
+                 // Include Name so we can filter out non-CPU thermal zones.
+-                // On HP Omen, the first zone returned is often a skin/chassis sensor (~39°C),
++                // On HP Omen/Victus, the first zone returned is often a skin/chassis sensor (~20°C),
+                 // not the CPU package. Without filtering, this causes a permanently wrong readout.
++                //
++                // HP Ryzen-specific note: the CPU package zone is typically named "TSZ0" on
++                // HP Victus/Omen Ryzen laptops (confirmed on Ryzen 5 7640HS, BIOS F.31).
++                // "TSZ0" does NOT match any of the IsCpuLikeInstance() patterns, so without the
++                // highest-temp fallback below, Ryzen CPU temp would be reported as 0 or as the
++                // ambient zone's 20°C.
+                 using var searcher = new ManagementObjectSearcher(
+                     @"root\CIMV2",
+-                    "SELECT Name, Temperature FROM Win32_PerfFormattedData_Counters_ThermalZoneInformation");
++                    "SELECT Name, Temperature, HighPrecisionTemperature FROM Win32_PerfFormattedData_Counters_ThermalZoneInformation");
+ 
+                 double bestTemp = 0;
++                double bestNonCpuLikeTemp = 0; // fallback: hottest valid zone
+                 bool foundCpuLikeZone = false;
+ 
+                 foreach (ManagementObject obj in searcher.Get())
+                 {
+-                    if (obj["Temperature"] is not uint kelvin || kelvin == 0)
+-                        continue;
++                    // Prefer HighPrecisionTemperature (tenths of Kelvin) when available;
++                    // the integer "Temperature" field loses precision and can round 52°C down to 50°C.
++                    double tempC = 0;
++                    if (obj["HighPrecisionTemperature"] is uint hpTemp && hpTemp > 0)
++                    {
++                        tempC = Math.Round((hpTemp / 10.0) - 273.15, 1);
++                    }
++                    else if (obj["Temperature"] is uint kelvin && kelvin > 0)
++                    {
++                        tempC = Math.Round(kelvin - 273.15, 1);
++                    }
+ 
+-                    double tempC = Math.Round(kelvin - 273.15, 1);
+                     var instanceName = obj["Name"]?.ToString() ?? string.Empty;
+                     bool isCpuLike = IsCpuLikeInstance(instanceName);
+ 
+@@ -123,16 +139,32 @@ namespace OmenCore.Hardware
+                             foundCpuLikeZone = true;
+                         }
+                     }
+-                    else if (!foundCpuLikeZone && bestTemp == 0)
++                    else
+                     {
+-                        // Keep as tentative fallback only if we never find a CPU-like zone
+-                        bestTemp = tempC;
++                        // Track the hottest valid non-CPU-like zone as a fallback.
++                        // On HP Ryzen systems where the CPU zone is named "TSZ0" (not CPU-like),
++                        // this is what actually returns the real CPU temperature — the CPU is
++                        // always the hottest active thermal zone on a running laptop.
++                        if (tempC > bestNonCpuLikeTemp)
++                        {
++                            bestNonCpuLikeTemp = tempC;
++                        }
+                     }
+                 }
+ 
+-                // Only accept the result if a CPU-like zone was found.
+-                // If only generic/ambient zones exist, return 0 to let the ACPI WMI path try.
+-                return foundCpuLikeZone ? bestTemp : 0;
++                if (foundCpuLikeZone)
++                    return bestTemp;
++
++                // No CPU-named zone found (common on HP Ryzen). Use the hottest valid zone
++                // as the CPU temp — the CPU is always hotter than ambient/skin sensors.
++                // Log it so we can see which zone we're attributing to the CPU.
++                if (bestNonCpuLikeTemp > 0)
++                {
++                    global::Logger.WriteLine($"[AcpiReader] No CPU-named zone found — using hottest valid zone ({bestNonCpuLikeTemp}°C) as CPU temp (HP Ryzen fallback)");
++                    return bestNonCpuLikeTemp;
++                }
++
++                return 0;
+             }
+             catch (Exception ex)
+             {
+@@ -155,7 +187,10 @@ namespace OmenCore.Hardware
+                     @"root\wmi",
+                     "SELECT CurrentTemperature, InstanceName FROM MSAcpi_ThermalZoneTemperature");
+ 
+-                double bestTemp = 0;
++                double bestCpuLikeTemp = 0;
++                string? bestCpuLikeInstance = null;
++                double bestNonCpuLikeTemp = 0; // fallback: hottest valid zone
++                string? bestNonCpuLikeInstance = null;
+ 
+                 foreach (ManagementObject obj in searcher.Get())
+                 {
+@@ -180,27 +215,52 @@ namespace OmenCore.Hardware
+                         continue;
+                     }
+ 
+-                    if (preferredInstanceName == null)
++                    // If we already have a preferred instance (from a previous call), trust it
++                    // as long as it's still reporting valid data.
++                    if (preferredInstanceName != null && instanceName == preferredInstanceName)
+                     {
+-                        bestTemp = tempC;
+-                        preferredInstanceName = instanceName;
++                        bestCpuLikeTemp = tempC;
++                        bestCpuLikeInstance = instanceName;
++                        // Keep scanning in case a CPU-like zone shows up with higher confidence,
++                        // but a sticky preferredInstance is a strong signal.
+                     }
+-                    else if (instanceName == preferredInstanceName)
+-                    {
+-                        bestTemp = tempC;
+-                    }
+-                    else if (IsCpuLikeInstance(instanceName))
++
++                    if (isCpuLike)
+                     {
+-                        bestTemp = tempC;
+-                        preferredInstanceName = instanceName;
++                        if (tempC > bestCpuLikeTemp)
++                        {
++                            bestCpuLikeTemp = tempC;
++                            bestCpuLikeInstance = instanceName;
++                        }
+                     }
+-                    else if (bestTemp == 0)
++                    else
+                     {
+-                        bestTemp = tempC;
++                        // Track the hottest valid non-CPU-like zone.
++                        // On HP Ryzen laptops the CPU zone is named "TSZ0" (not CPU-like), so this
++                        // branch is what actually captures the real CPU temp. The CPU is always
++                        // hotter than ambient/skin sensors on a running laptop.
++                        if (tempC > bestNonCpuLikeTemp)
++                        {
++                            bestNonCpuLikeTemp = tempC;
++                            bestNonCpuLikeInstance = instanceName;
++                        }
+                     }
+                 }
+ 
+-                return bestTemp;
++                if (bestCpuLikeTemp > 0)
++                {
++                    preferredInstanceName = bestCpuLikeInstance;
++                    return bestCpuLikeTemp;
++                }
++
++                if (bestNonCpuLikeTemp > 0)
++                {
++                    global::Logger.WriteLine($"[AcpiReader] No CPU-named ACPI zone found — using hottest valid zone '{bestNonCpuLikeInstance}' ({bestNonCpuLikeTemp}°C) as CPU temp (HP Ryzen fallback)");
++                    preferredInstanceName = bestNonCpuLikeInstance;
++                    return bestNonCpuLikeTemp;
++                }
++
++                return 0;
+             }
+             catch (Exception ex)
+             {
+diff --git a/app/Omen/FanController.cs b/app/Omen/FanController.cs
+--- a/app/Omen/FanController.cs
++++ b/app/Omen/FanController.cs
+@@ -8,7 +8,9 @@ namespace OmenCore.Hardware
+ {
+     public class FanController
+     {
+-        private readonly IEcAccess _ecAccess;
++        // Nullable: EcAccessFactory.GetEcAccess() returns null when no backend
++        // (PawnIO/WinRing0) is installed. All access must be null-safe.
++        private readonly IEcAccess? _ecAccess;
+         private readonly IReadOnlyDictionary<string, int> _registerMap;
+         private readonly LibreHardwareMonitorImpl? _bridge;
+         private readonly HpWmiBios? _wmiBios;
+@@ -47,10 +49,12 @@ namespace OmenCore.Hardware
+             _wmiBios = wmiBios;
+             _logging = logging;
+             _ecWriteDisableCooldownSeconds = ecWriteDisableCooldownSeconds;
+-            _logging?.Debug($"FanController initialized (EC access ready: {_ecAccess.IsAvailable}, bridge: {(bridge != null ? "LHM" : "none (FanService provides temps)")}, wmiBios: {(wmiBios != null ? "available" : "none")}");
++            // Null-safe: _ecAccess may be null when no EC backend (PawnIO/WinRing0) is available.
++            bool ecReady = _ecAccess?.IsAvailable ?? false;
++            _logging?.Debug($"FanController initialized (EC access ready: {ecReady}, bridge: {(bridge != null ? "LHM" : "none (FanService provides temps)")}, wmiBios: {(wmiBios != null ? "available" : "none")}");
+         }
+ 
+-        public bool IsEcReady => _ecAccess.IsAvailable && !EcWritesTemporarilyDisabled;
++        public bool IsEcReady => (_ecAccess?.IsAvailable ?? false) && !EcWritesTemporarilyDisabled;
+         
+         /// <summary>
+         /// True if EC writes are temporarily disabled by the watchdog (safety cooldown).
+@@ -352,7 +356,7 @@ namespace OmenCore.Hardware
+         /// </summary>
+         protected virtual (int fan1Rpm, int fan2Rpm) ReadActualFanRpm()
+         {
+-            if (!_ecAccess.IsAvailable)
++            if (_ecAccess == null || !_ecAccess.IsAvailable)
+                 return (0, 0);
+ 
+             // SAFETY: Only use primary registers (0x34/0x35) which are known to work.
+@@ -439,6 +443,13 @@ namespace OmenCore.Hardware
+             // Track last set percentage for RPM estimation fallback
+             _lastSetFanPercent = Math.Clamp(percent, 0, 100);
+ 
++            // If EC access is unavailable (no PawnIO/WinRing0) or watchdog has disabled writes, skip.
++            if (_ecAccess == null || !_ecAccess.IsAvailable)
++            {
++                _logging?.Debug($"WriteDuty({percent}%) skipped — EC access unavailable");
++                return;
++            }
++
+             // If the EC watchdog has temporarily disabled EC writes, skip immediately.
+             if (EcWritesTemporarilyDisabled)
+             {
+@@ -576,6 +587,12 @@ namespace OmenCore.Hardware
+                 return;
+             }
+             
++            if (_ecAccess == null || !_ecAccess.IsAvailable)
++            {
++                _logging?.Debug("SetMaxSpeed skipped — EC access unavailable");
++                return;
++            }
++
+             try
+             {
+                 _logging?.Debug($"EC SetMaxSpeed: enabling manual control and max values");
+@@ -627,6 +644,12 @@ namespace OmenCore.Hardware
+             // Track last set percentage (average for compatibility)
+             _lastSetFanPercent = (cpuPercent + gpuPercent) / 2;
+ 
++            if (_ecAccess == null || !_ecAccess.IsAvailable)
++            {
++                _logging?.Debug($"SetFanSpeeds({cpuPercent}%, {gpuPercent}%) skipped — EC access unavailable");
++                return;
++            }
++
+             try
+             {
+                 _logging?.Debug($"EC SetFanSpeeds: CPU={cpuPercent}%, GPU={gpuPercent}%");
+@@ -689,6 +712,12 @@ namespace OmenCore.Hardware
+             const ushort REG_FAN_STATE = 0xF4;        // Fan state: 0x00=Enable, 0x02=Disable
+             
+             _lastSetFanPercent = -1;
++
++            if (_ecAccess == null || !_ecAccess.IsAvailable)
++            {
++                _logging?.Debug("RestoreAutoControl skipped — EC access unavailable");
++                return;
++            }
+             
+             try
+             {
+diff --git a/app/Omen/WmiBiosMonitor.cs b/app/Omen/WmiBiosMonitor.cs
+--- a/app/Omen/WmiBiosMonitor.cs
++++ b/app/Omen/WmiBiosMonitor.cs
+@@ -163,6 +163,11 @@ namespace OmenCore.Hardware
+         private System.Diagnostics.PerformanceCounter? _cpuPerfCounter;
+         private bool _cpuPerfCounterAvailable = true;
+         private static int _workerPrelaunchAttempted;
++
++        // Ryzen SMN Tctl reader — primary CPU temperature source on AMD systems.
++        // Lazily initialized on first use; stays null on Intel systems or when PawnIO/SMU is unavailable.
++        private RyzenTemperatureProvider? _ryzenTempProvider;
++        private bool _ryzenTempProviderInitAttempted;
+         
+         public bool IsAvailable => _wmiBios.IsAvailable;
+ 
+@@ -355,11 +360,26 @@ namespace OmenCore.Hardware
+             
+             try
+             {
+-                // SOURCE 1: ACPI thermal zone — primary CPU temperature.
++                // SOURCE 0: AMD Ryzen SMN Tctl — primary CPU temperature on Ryzen systems.
++                // Reads SMN register 0x59800 directly via PawnIO PCI config space — same method
++                // HP uses internally in AMD17CPU.cs. Bypasses ACPI thermal zones entirely, which
++                // on HP Ryzen laptops are misnamed (CPU zone is "TSZ0", not CPU-like) and report
++                // skin/ambient temps instead of the actual CPU package.
++                //
++                // On Intel systems or when PawnIO is not installed, this returns null and falls
++                // through to SOURCE 1 (ACPI) and SOURCE 2 (HP WMI BIOS) below.
++                bool cpuTempProvidedByRyzenSmn = false;
++                var ryzenTemp = GetRyzenCpuTemperature();
++                if (ryzenTemp.HasValue && ryzenTemp.Value > 0)
++                {
++                    cpuTempProvidedByRyzenSmn = ApplyCpuTemperature(ryzenTemp.Value, "Ryzen SMN Tctl");
++                }
++
++                // SOURCE 1: ACPI thermal zone — primary CPU temperature (non-Ryzen fallback).
+                 // Same source as:
+                 // Get-CimInstance -Namespace root\wmi -ClassName MSAcpi_ThermalZoneTemperature
+                 bool cpuTempProvidedByAcpi = false;
+-                if (_acpiThermalAvailable)
++                if (!cpuTempProvidedByRyzenSmn && _acpiThermalAvailable)
+                 {
+                     double acpiCpuTemp = GetAcpiCpuTemperature();
+                     cpuTempProvidedByAcpi = ApplyCpuTemperature(acpiCpuTemp, "ACPI");
+@@ -383,7 +403,7 @@ namespace OmenCore.Hardware
+                             ? IdleConsecutiveIdenticalTempReads
+                             : MaxConsecutiveIdenticalTempReads;
+ 
+-                        if (!cpuTempProvidedByAcpi)
++                        if (!cpuTempProvidedByRyzenSmn && !cpuTempProvidedByAcpi)
+                         {
+                             ApplyCpuTemperature(cpuTemp, "HP WMI BIOS", cpuFreezeThreshold);
+                         }
+@@ -1868,6 +1888,59 @@ namespace OmenCore.Hardware
+             double tempC = AcpiThermalZoneTemperatureReader.ReadCpuTemperature(ref _cpuThermalZoneInstance);
+             return tempC;
+         }
++
++        /// <summary>
++        /// Get CPU temperature directly from the AMD Ryzen SMN Tctl register (0x59800).
++        ///
++        /// This is the primary CPU temperature source on AMD Ryzen systems. It bypasses ACPI
++        /// thermal zones (which on HP Ryzen laptops are misnamed — CPU zone is "TSZ0", not
++        /// CPU-like — and report skin/ambient temps) and HP WMI BIOS (which returns integer-only
++        /// values and can freeze).
++        ///
++        /// Same method HP uses internally in HP.Omen.Core.Common (AMD17CPU.Update()) and the
++        /// same method LibreHardwareMonitor uses for all Zen CPU sensors.
++        ///
++        /// Returns 0.0 when unavailable — caller should fall through to ACPI/WMI BIOS.
++        /// </summary>
++        private double? GetRyzenCpuTemperature()
++        {
++            // Lazy-init the provider on first call. We do this here rather than in the constructor
++            // because RyzenSmu.Initialize() loads PawnIO and we don't want to pay that cost on
++            // systems where it isn't installed, or before the monitor is actually used.
++            if (!_ryzenTempProviderInitAttempted)
++            {
++                _ryzenTempProviderInitAttempted = true;
++                try
++                {
++                    if (RyzenControl.IsAmd())
++                    {
++                        var smu = new RyzenSmu();
++                        if (smu.Initialize() && smu.IsAvailable)
++                        {
++                            _ryzenTempProvider = new RyzenTemperatureProvider(smu, _logging);
++                            _logging?.Info($"[WmiBiosMonitor] ✓ Ryzen SMN Tctl provider initialized — primary CPU temperature source");
++                        }
++                        else
++                        {
++                            _logging?.Info($"[WmiBiosMonitor] Ryzen SMN Tctl provider not available (SMU init failed or PawnIO not installed) — will fall back to ACPI/WMI BIOS for CPU temp");
++                        }
++                    }
++                    else
++                    {
++                        _logging?.Info("[WmiBiosMonitor] Intel CPU detected — Ryzen SMN Tctl provider not initialized");
++                    }
++                }
++                catch (Exception ex)
++                {
++                    _logging?.Warn($"[WmiBiosMonitor] Ryzen SMN Tctl provider init failed: {ex.GetType().Name}: {ex.Message}");
++                }
++            }
++
++            if (_ryzenTempProvider == null || !_ryzenTempProvider.IsAvailable)
++                return null;
++
++            return _ryzenTempProvider.ReadPackageTemperatureC();
++        }
+         
+         /// <summary>
+         /// Get CPU current clock speed in MHz via WMI Win32_Processor.
+@@ -1901,6 +1974,8 @@ namespace OmenCore.Hardware
+             _wmiBios.Dispose();
+             _cpuPerfCounter?.Dispose();
+             _tempFallbackMonitor?.Dispose();
++            // RyzenTemperatureProvider implements IDisposable and disposes its underlying RyzenSmu.
++            try { _ryzenTempProvider?.Dispose(); } catch { }
+             foreach (var counter in _gpuEngineCounters.Values)
+             {
+                 counter.Dispose();

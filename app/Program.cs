@@ -21,6 +21,8 @@ namespace GHelper
     {
         public static NotifyIcon trayIcon;
         public static AsusACPI acpi;
+        
+        public static OmenCore.Hardware.IFanController? OmenFans;
 
         public static SettingsForm settingsForm;
 

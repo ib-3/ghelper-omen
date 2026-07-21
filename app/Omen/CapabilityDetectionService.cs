@@ -568,21 +568,10 @@ namespace OmenCore.Hardware
                 if (!installedInRegistry)
                     return false;
                 
-                // Step 2: PawnIO is installed — probe the driver to confirm it can actually
-                // be initialized. Registry presence alone doesn't guarantee the driver is loaded
-                // (e.g., installed but awaiting reboot, or partially uninstalled).
-                var ecAccess = EcAccessFactory.GetEcAccess();
-                if (ecAccess != null && ecAccess.IsAvailable)
-                {
-                    _logging?.Info("  PawnIO: Probed successfully — EC access confirmed (Secure Boot compatible)");
-                    return true;
-                }
-                
-                // PawnIO installed but driver initialization failed
-                _logging?.Warn("  PawnIO: Found in registry but driver initialization failed");
-                _logging?.Warn("    → EC and MSR features will be unavailable until driver is operational");
-                _logging?.Info("    → Possible causes: driver awaiting reboot, service not started, or module missing");
-                return false;
+                // Step 2: Since we removed the EC backend, we don't probe the driver anymore.
+                // Just return the registry/WMI status.
+                _logging?.Info("  PawnIO: Detected but EC features are disabled in this build.");
+                return installedInRegistry;
             }
             catch
             {

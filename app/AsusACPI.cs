@@ -32,7 +32,7 @@ internal sealed class OmenBackend : IDisposable
     private readonly IFanController? _fans;
     private readonly WmiBiosMonitor? _monitor; // [NEW] High-precision monitor
     private readonly IMsrAccess? _msrAccess;   // PawnIO MSR — null on Ryzen or if PawnIO not installed
-    private readonly OmenCore.Hardware.PowerLimitController? _powerLimitController;
+    // PowerLimitController removed
     private OmenCore.Hardware.IMmioAccess? _mmioAccess;
     private OmenCore.Hardware.MmioPowerLimitProvider? _mmioLimits;
     private readonly byte[][] _curves = new byte[2][];
@@ -41,15 +41,15 @@ internal sealed class OmenBackend : IDisposable
     private int _lastEvaluatedCpuPercent = -1;
     private int _lastEvaluatedGpuPercent = -1;
 
-    // [MODIFIED] Constructor now accepts WmiBiosMonitor + msrAccess + powerLimitController
-    private OmenBackend(LoggingService logging, HpWmiBios? bios, IFanController? fans, WmiBiosMonitor? monitor, IMsrAccess? msrAccess, OmenCore.Hardware.PowerLimitController? powerLimitController)
+    // [MODIFIED] Constructor now accepts WmiBiosMonitor + msrAccess
+    private OmenBackend(LoggingService logging, HpWmiBios? bios, IFanController? fans, WmiBiosMonitor? monitor, IMsrAccess? msrAccess)
     {
         _logging = logging;
         _bios = bios;
         _fans = fans;
         _monitor = monitor;
         _msrAccess = msrAccess;
-        _powerLimitController = powerLimitController;
+        // _powerLimitController removed
         _curves[(int)AsusFan.CPU] = new byte[16];
         _curves[(int)AsusFan.GPU] = new byte[16];
 
@@ -103,6 +103,7 @@ internal sealed class OmenBackend : IDisposable
     */
 
     public bool IsAvailable => (_bios?.IsAvailable ?? false) || (_fans?.IsAvailable ?? false);
+    public bool IsOmenV2() => _bios != null && _bios.ThermalPolicy >= OmenCore.Hardware.HpWmiBios.ThermalPolicyVersion.V2;
     private bool HasCpuPowerLimitControl
     {
         get
@@ -161,24 +162,12 @@ internal sealed class OmenBackend : IDisposable
 
             try
             {
-                var ecAccess = OmenCore.Hardware.EcAccessFactory.GetEcAccess();
+                int maxFanOverride = AppConfig.Get("omen_max_fan_level", 0);
                 
-                // Always try EC direct fan control first as requested
-                if (ecAccess != null && ecAccess.IsAvailable)
-                {
-                    var registerMap = new System.Collections.Generic.Dictionary<string, int>();
-                    var baseController = new OmenCore.Hardware.FanController(ecAccess, registerMap, null, logging, bios);
-                    fans = new OmenCore.Hardware.EcFanControllerWrapper(baseController, null, logging);
-                    Logger.WriteLine($"OMEN backend: Using direct EC Fan Controller (EC access: available).");
-                }
-                else
-                {
-                    // Fallback to WMI if EC is unavailable
-                    int maxFanOverride = AppConfig.Get("omen_max_fan_level", 0);
-                    var wmiFans = new WmiFanController(null, logging, maxFanOverride, injectedWmiBios: bios);
-                    fans = new OmenCore.Hardware.WmiFanControllerWrapper(wmiFans, logging);
-                    Logger.WriteLine($"OMEN backend: EC access unavailable. Falling back to WMI Fan Controller.");
-                }
+                var wmiController = new OmenCore.Hardware.WmiFanController(null, logging, maxFanOverride, injectedWmiBios: bios);
+                fans = new OmenCore.Hardware.WmiFanControllerWrapper(wmiController, logging);
+                Program.OmenFans = fans;
+                Logger.WriteLine($"OMEN backend: Using pure WMI Fan Controller.");
             }
             catch (Exception ex)
             {
@@ -226,29 +215,10 @@ internal sealed class OmenBackend : IDisposable
                 }
             }
 
-            OmenCore.Hardware.PowerLimitController? powerLimitController = null;
-            try
-            {
-                var ecAccess = OmenCore.Hardware.EcAccessFactory.GetEcAccess();
-                if (ecAccess != null && ecAccess.IsAvailable)
-                {
-                    powerLimitController = new OmenCore.Hardware.PowerLimitController(ecAccess, useSimplifiedMode: true);
-                    Logger.WriteLine("OMEN backend: PowerLimitController initialized via PawnIO EC access.");
-                }
-                else
-                {
-                    Logger.WriteLine("OMEN backend: PowerLimitController unavailable (no EC access).");
-                }
-            }
-            catch (Exception ex)
-            {
-                Logger.WriteLine($"OMEN backend: PowerLimitController init failed: {ex.GetType().Name}: {ex.Message}");
-            }
-
             Logger.WriteLine($"OMEN backend: BIOS={bios?.Status ?? "null"}, Fans={fans?.Status ?? "null"}, Monitor={monitor?.MonitoringSource ?? "null"}");
 
-            // [MODIFIED] Return backend with monitor + MSR access + PowerLimitController
-            return new OmenBackend(logging, bios, fans, monitor, msrAccess, powerLimitController);
+            // [MODIFIED] Return backend with monitor + MSR access
+            return new OmenBackend(logging, bios, fans, monitor, msrAccess);
 
             /* [LEGACY TRYCREATE RETURN]
             Logger.WriteLine($"OMEN backend: BIOS={bios?.Status ?? "null"}, Fans={fans?.Status ?? "null"}");
@@ -330,24 +300,7 @@ internal sealed class OmenBackend : IDisposable
                 _ => "Balanced"
             };
 
-            if (_powerLimitController != null && _powerLimitController.IsAvailable)
-            {
-                var perfMode = new OmenCore.Models.PerformanceMode { Name = mode };
-                try
-                {
-                    _powerLimitController.ApplyPerformanceLimits(perfMode);
-                    Logger.WriteLine($"OmenPowerLimitController = {mode} : OK");
-                }
-                catch (Exception ex)
-                {
-                    Logger.WriteLine($"OmenPowerLimitController = {mode} : {ex.Message}");
-                }
-            }
-            else
-            {
-                Logger.WriteLine($"OmenPowerLimitController = {mode} : UNAVAILABLE (No EC Access/Admin)");
-            }
-
+            // PowerLimitController logic removed
             if (!AppConfig.IsApplyFans())
             {
                 // Also set the appropriate base performance mode
@@ -1888,6 +1841,7 @@ public class AsusACPI
     }
 
     public bool IsOmen() => _omen?.IsAvailable == true;
+    public bool IsOmenV2() => _omen?.IsOmenV2() == true;
 
     public int OmenGetGpuMode()
     {

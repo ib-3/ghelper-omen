@@ -529,6 +529,15 @@ namespace OmenCore.Hardware
 
             percent = Math.Clamp(percent, 0, 100);
 
+            if (IsManualControlActive && _lastManualCpuPercent == percent && _lastManualGpuPercent == percent)
+            {
+                // Avoid spamming the WMI interface if the requested speed hasn't changed.
+                // Spamming SetFanLevel interrupts the EC's internal hardware fan curve smoothing, 
+                // causing fans to ramp up/down incredibly slowly (e.g., 100 RPM/sec).
+                // The keepalive timer handles BIOS reversion independently.
+                return true;
+            }
+
             // NOTE: 0% is allowed as a real manual level (0 RPM / fans stopped).
             // The keepalive timer will re-send SetFanLevel(0,0) continuously so the BIOS
             // does not revert to auto after its 120-second timeout.
@@ -559,7 +568,9 @@ namespace OmenCore.Hardware
                             }
                         }
 
-                        success = _wmiBios.SetFanMax(true);
+                        bool maxApplied = _wmiBios.SetFanMax(true);
+
+                        success = maxApplied;
                         if (success)
                         {
                             AddCommandToHistory("SetFanMax(true)", true, null, rpmBefore, null);
@@ -587,13 +598,16 @@ namespace OmenCore.Hardware
                         if (_isMaxModeActive)
                         {
                             _wmiBios.SetFanMax(false);
-                            
-                            HpWmiBios.FanMode perfMode = ApplyV0MappingIfNecessary(HpWmiBios.FanMode.Performance);
-                            if (_lastMode != perfMode)
-                            {
-                                _logging?.Info($"Restoring Thermal Profile to {_lastMode} after dropping below 100% fan speed...");
-                                _wmiBios.SetFanMode(_lastMode);
-                            }
+                            _isMaxModeActive = false;
+                        }
+                        
+                        // HP BIOS only respects manual fan commands (SetFanLevel) when in Performance mode.
+                        HpWmiBios.FanMode perfMode = ApplyV0MappingIfNecessary(HpWmiBios.FanMode.Performance);
+                        if (_lastMode != perfMode)
+                        {
+                            _logging?.Info($"Elevating Thermal Profile to {perfMode} to unlock manual fan control...");
+                            _wmiBios.SetFanMode(perfMode);
+                            _lastMode = perfMode;
                         }
                         
                         // Convert percentage to fan level

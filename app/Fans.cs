@@ -22,7 +22,6 @@ namespace GHelper
         Series seriesXGM;
 
         static bool gpuVisible = true;
-        static bool fanRpm = false;
 
         static readonly Font _axisFont = new Font("Arial", 7F);
 
@@ -277,7 +276,7 @@ namespace GHelper
 
             if ((result.ChartElementType == ChartElementType.AxisLabels || result.ChartElementType == ChartElementType.Axis) && result.Axis == chart.ChartAreas[0].AxisY)
             {
-                fanRpm = !fanRpm;
+                FanSensorControl.fanRpm = !FanSensorControl.fanRpm;
                 SetAxis(chartCPU, AsusFan.CPU);
                 SetAxis(chartGPU, AsusFan.GPU);
                 if (chartMid.Visible) SetAxis(chartMid, AsusFan.Mid);
@@ -767,10 +766,22 @@ namespace GHelper
         {
             if (percentage == 0) return "OFF";
 
+            if (AppConfig.IsOmen())
+            {
+                if (Program.acpi?.IsOmenV2() == true)
+                    return percentage + "%";
+                
+                int maxRpm = AppConfig.Get("omen_max_fan_level", 0);
+                if (maxRpm <= 0) maxRpm = 60; // 6000 RPM default
+                maxRpm *= 100;
+                
+                return Math.Floor((float)percentage / 100 * maxRpm).ToString() + unit;
+            }
+
             int Min = FanSensorControl.GetFanMin(device);
             int Max = FanSensorControl.GetFanMax(device);
 
-            if (fanRpm)
+            if (FanSensorControl.fanRpm)
                 return (200 * Math.Floor((float)(Min * 100 + (Max - Min) * percentage) / 200)).ToString() + unit;
             else
                 return percentage + "%";
@@ -803,7 +814,17 @@ namespace GHelper
         {
 
             string title = "";
-            string rpmLabel = fanRpm ? "RPM" : "%";
+            string rpmLabel = "%";
+            
+            if (AppConfig.IsOmen())
+            {
+                rpmLabel = (Program.acpi?.IsOmenV2() == true) ? "%" : "RPM";
+            }
+            else if (FanSensorControl.fanRpm)
+            {
+                rpmLabel = "RPM";
+            }
+            
             string scale = TempHelper.IsFahrenheit ? $", {rpmLabel}/°F" : $", {rpmLabel}/°C";
 
             switch (device)

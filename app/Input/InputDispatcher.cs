@@ -1337,21 +1337,37 @@ namespace GHelper.Input
         private static IntPtr _hookHandle = IntPtr.Zero;
         private static NativeMethods.LowLevelKeyboardProc _hookProc = HookCallback;
 
+        private static Thread? _hookThread = null;
+
         public static void StartOmenHook()
         {
-            if (_hookHandle != IntPtr.Zero) return;
+            if (_hookHandle != IntPtr.Zero || _hookThread != null) return;
 
-            using (Process curProcess = Process.GetCurrentProcess())
-            using (ProcessModule curModule = curProcess.MainModule!)
+            _hookThread = new Thread(() =>
             {
-                _hookHandle = NativeMethods.SetWindowsHookEx(13, // WH_KEYBOARD_LL
-                    _hookProc, NativeMethods.GetModuleHandle(curModule.ModuleName), 0);
-            }
+                using (Process curProcess = Process.GetCurrentProcess())
+                using (ProcessModule curModule = curProcess.MainModule!)
+                {
+                    _hookHandle = NativeMethods.SetWindowsHookEx(13, // WH_KEYBOARD_LL
+                        _hookProc, NativeMethods.GetModuleHandle(curModule.ModuleName), 0);
+                }
 
-            if (_hookHandle != IntPtr.Zero)
-                Logger.WriteLine("Low-level keyboard hook active for OMEN key");
-            else
-                Logger.WriteLine("Failed to set low-level keyboard hook");
+                if (_hookHandle != IntPtr.Zero)
+                {
+                    Logger.WriteLine("Low-level keyboard hook active for OMEN key (Background Thread)");
+                    // Start a message pump on this thread so the hook callbacks get processed
+                    // without being delayed by the main UI thread.
+                    Application.Run();
+                }
+                else
+                {
+                    Logger.WriteLine("Failed to set low-level keyboard hook");
+                }
+            });
+
+            _hookThread.IsBackground = true;
+            _hookThread.SetApartmentState(ApartmentState.STA);
+            _hookThread.Start();
         }
 
         private static IntPtr HookCallback(int nCode, IntPtr wParam, IntPtr lParam)

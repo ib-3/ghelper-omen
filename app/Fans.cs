@@ -30,6 +30,16 @@ namespace GHelper
 
         const int fansMax = 100;
 
+        static int GetEffectiveFansMax()
+        {
+            if (AppConfig.IsOmen() && Program.acpi?.IsOmenV2() == true)
+            {
+                int maxRpm = AppConfig.Get("omen_max_fan_level", 0);
+                if (maxRpm > 0 && maxRpm < 100) return maxRpm;
+            }
+            return fansMax;
+        }
+
         NvidiaGpuControl? nvControl = null;
         ModeControl modeControl = Program.modeControl;
 
@@ -55,7 +65,7 @@ namespace GHelper
             labelPowerLimits.Text = Properties.Strings.PowerLimits;
             // rucna primjena
 
-            labelFans.Text = "BIOS " + Properties.Strings.FanCurves;
+            // labelFans.Text will be set dynamically in InitFans
             labelBoost.Text = Properties.Strings.CPUBoost;
             buttonReset.Text = Properties.Strings.FactoryDefaults;
             checkApplyFans.Text = Properties.Strings.ApplyFanCurve;
@@ -141,6 +151,7 @@ namespace GHelper
             trackSlow.KeyUp += TrackPower_KeyUp;
 
             checkApplyFans.Click += CheckApplyFans_Click;
+            checkSyncFans.Click += CheckSyncFans_Click;
             checkApplyPower.Click += CheckApplyPower_Click;
 
             trackGPUClockLimit.Minimum = NvidiaGpuControl.MinClockLimit;
@@ -188,11 +199,11 @@ namespace GHelper
             labelFansResult.Visible = false;
 
 
-            trackUV.Minimum = CpuInfo.MinCPUUV;
-            trackUV.Maximum = CpuInfo.MaxCPUUV;
+            trackUV.Minimum = 0;
+            trackUV.Maximum = 50;
 
-            trackUViGPU.Minimum = CpuInfo.MinIGPUUV;
-            trackUViGPU.Maximum = CpuInfo.MaxIGPUUV;
+            trackUViGPU.Minimum = 8;
+            trackUViGPU.Maximum = 300;
 
             trackTemp.Minimum = CpuInfo.MinTemp;
             trackTemp.Maximum = CpuInfo.DefaultTemp;
@@ -387,7 +398,7 @@ namespace GHelper
             //if (!ProcessHelper.IsUserAdministrator()) return;
 
             int cpuUV = Math.Max(trackUV.Minimum, Math.Min(trackUV.Maximum, AppConfig.GetMode("cpu_uv", 0)));
-            int igpuUV = Math.Max(trackUViGPU.Minimum, Math.Min(trackUViGPU.Maximum, AppConfig.GetMode("igpu_uv", 0)));
+            int igpuUV = Math.Max(trackUViGPU.Minimum, Math.Min(trackUViGPU.Maximum, AppConfig.GetMode("igpu_uv", 45)));
 
             int temp = AppConfig.GetMode("cpu_temp");
             if (temp < CpuInfo.MinTemp || temp > CpuInfo.DefaultTemp) temp = CpuInfo.DefaultTemp;
@@ -400,7 +411,7 @@ namespace GHelper
 
             VisualiseAdvanced();
 
-            buttonAdvanced.Visible = false; // CpuInfo.IsAMD;
+            buttonAdvanced.Visible = (CpuInfo.IsSupportedUV() || CpuInfo.IsSupportedUViGPU()) && Application.ExecutablePath.EndsWith("dev.exe", StringComparison.OrdinalIgnoreCase);
 
         }
 
@@ -546,7 +557,7 @@ namespace GHelper
                 trackGPUPower.Maximum = smiLimits.Value.Maximum;
                 
                 int gpu_power_smi = AppConfig.GetMode("gpu_power");
-                if (gpu_power_smi < 0) gpu_power_smi = smiLimits.Value.Current;
+                if (gpu_power_smi < 0) gpu_power_smi = AppConfig.GetDefaultGpuPowerLimit(smiLimits.Value.Maximum);
                 
                 trackGPUPower.Value = Math.Max(Math.Min(gpu_power_smi, smiLimits.Value.Maximum), smiLimits.Value.Minimum);
                 VisualiseGPUSettings();
@@ -571,7 +582,7 @@ namespace GHelper
                 Logger.WriteLine($"ReadGPUPower ({Modes.GetCurrentBase()}): {gpuPowerVar}");
 
                 int gpu_power = AppConfig.GetMode("gpu_power");
-                if (gpu_power < 0) gpu_power = (gpuPowerVar >= 0) ? gpuPowerVar : AsusACPI.MaxGPUPower;
+                if (gpu_power < 0) gpu_power = AppConfig.GetDefaultGpuPowerLimit(AsusACPI.MaxGPUPower);
 
                 Invoke(delegate
                 {
@@ -769,7 +780,10 @@ namespace GHelper
             if (AppConfig.IsOmen())
             {
                 if (Program.acpi?.IsOmenV2() == true)
-                    return percentage + "%";
+                {
+                    // V2 uses percentage scale: level N = N * 100 RPM
+                    return (percentage * 100).ToString() + unit;
+                }
                 
                 int maxRpm = AppConfig.Get("omen_max_fan_level", 0);
                 if (maxRpm <= 0) maxRpm = 60; // 6000 RPM default
@@ -792,7 +806,9 @@ namespace GHelper
 
             chart.ChartAreas[0].AxisY.CustomLabels.Clear();
 
-            for (int i = 0; i <= fansMax; i += 10)
+            int effectiveMax = GetEffectiveFansMax();
+            int step = effectiveMax <= 60 ? 10 : 10;
+            for (int i = 0; i <= effectiveMax; i += step)
             {
                 chart.ChartAreas[0].AxisY.CustomLabels.Add(i - 2, i + 2, ChartYLabel(i, device));
             }
@@ -818,7 +834,7 @@ namespace GHelper
             
             if (AppConfig.IsOmen())
             {
-                rpmLabel = (Program.acpi?.IsOmenV2() == true) ? "%" : "RPM";
+                rpmLabel = "RPM";
             }
             else if (FanSensorControl.fanRpm)
             {
@@ -850,7 +866,7 @@ namespace GHelper
             chart.ChartAreas[0].AxisX.Interval = 10;
 
             chart.ChartAreas[0].AxisY.Minimum = 0;
-            chart.ChartAreas[0].AxisY.Maximum = fansMax;
+            chart.ChartAreas[0].AxisY.Maximum = GetEffectiveFansMax();
 
             chart.ChartAreas[0].AxisY.LabelStyle.Font = _axisFont;
             chart.ChartAreas[0].AxisX.LabelStyle.Font = _axisFont;
@@ -1019,6 +1035,10 @@ namespace GHelper
                     UpdatePowerLimitsVerification();
                 });
             }
+            else
+            {
+                modeControl.SetPerformanceMode();
+            }
         }
 
         private void CheckApplyFans_Click(object? sender, EventArgs e)
@@ -1027,8 +1047,19 @@ namespace GHelper
             CheckBox chk = (CheckBox)sender;
 
             AppConfig.SetMode("auto_apply", chk.Checked ? 1 : 0);
+            labelFans.Text = chk.Checked ? "Custom Fan Curves" : "Default Fan Curves";
             modeControl.SetPerformanceMode();
 
+        }
+
+        private void CheckSyncFans_Click(object? sender, EventArgs e)
+        {
+            if (sender is null) return;
+            CheckBox chk = (CheckBox)sender;
+
+            AppConfig.Set("fan_sync", chk.Checked ? 1 : 0);
+            InitFans(); // Refresh the UI (hide/show GPU chart)
+            modeControl.SetPerformanceMode(); // Apply the new sync curve
         }
 
         public void InitAxis()
@@ -1092,13 +1123,20 @@ namespace GHelper
                 }
                 else
                 {
-                    // odvojeni limiti
-                    labelLeftTotal.Text = "APU SPL";
-                    labelLeftSlow.Text = "APU sPPT";
-                    labelLeftFast.Text = "APU fPPT";
+                    // UXTU Adaptive Mode settings
+                    labelLeftTotal.Text = "Max Power Limit (W)";
+                    labelLeftSlow.Text = "CPU Temp Limit (°C)";
+                    labelLeftFast.Text = "Max Curve Optimizer (-)";
                     panelSlow.Visible = true;
                     panelFast.Visible = true;
-                    panelCPU.Visible = Program.acpi.IsAllAmdPPT();
+                    panelCPU.Visible = false;
+                    labelLiveCpuPower.Visible = false; // Hide 0.0W pkg power on AMD
+
+                    trackSlow.Min = CpuInfo.MinTemp;
+                    trackSlow.Max = CpuInfo.DefaultTemp;
+                    
+                    trackFast.Min = CpuInfo.MaxIGPUUV; // 0
+                    trackFast.Max = Math.Abs(CpuInfo.MinCPUUV); // usually 40 or 50
                 }
             }
             else
@@ -1127,20 +1165,29 @@ namespace GHelper
             if (limit_total > AsusACPI.MaxTotal) limit_total = AsusACPI.MaxTotal;
             if (limit_total < AsusACPI.MinTotal) limit_total = AsusACPI.MinTotal;
 
-            if (limit_slow > AsusACPI.MaxTotal) limit_slow = AsusACPI.MaxTotal;
-            if (limit_slow < AsusACPI.MinTotal) limit_slow = AsusACPI.MinTotal;
+            if (CpuInfo.IsAMD)
+            {
+                int limit_temp = AppConfig.GetMode("cpu_temp", CpuInfo.DefaultTemp);
+                int limit_uv = Math.Abs(AppConfig.GetMode("cpu_uv", 0));
+                
+                trackTotal.Value = limit_total;
+                trackSlow.Value = Math.Clamp(limit_temp, trackSlow.Min, trackSlow.Max);
+                trackFast.Value = Math.Clamp(limit_uv, trackFast.Min, trackFast.Max);
+                trackCPU.Value = limit_cpu;
+            }
+            else
+            {
+                if (limit_slow > AsusACPI.MaxTotal) limit_slow = AsusACPI.MaxTotal;
+                if (limit_slow < AsusACPI.MinTotal) limit_slow = AsusACPI.MinTotal;
 
-            if (limit_fast > AsusACPI.MaxTotal) limit_fast = AsusACPI.MaxTotal;
-            if (limit_fast < AsusACPI.MinTotal) limit_fast = AsusACPI.MinTotal;
+                if (limit_fast > AsusACPI.MaxTotal) limit_fast = AsusACPI.MaxTotal;
+                if (limit_fast < AsusACPI.MinTotal) limit_fast = AsusACPI.MinTotal;
 
-            if (limit_cpu > AsusACPI.MaxCPU) limit_cpu = AsusACPI.MaxCPU;
-            if (limit_cpu < AsusACPI.MinCPU) limit_cpu = AsusACPI.MinCPU;
-
-            trackTotal.Value = limit_total;
-            // sinkroniziraj
-            trackSlow.Value = CpuInfo.IsAMD ? limit_slow : limit_total;
-            trackFast.Value = CpuInfo.IsAMD ? limit_fast : limit_total;
-            trackCPU.Value = limit_cpu;
+                trackTotal.Value = limit_total;
+                trackSlow.Value = limit_total;
+                trackFast.Value = limit_total;
+                trackCPU.Value = limit_cpu;
+            }
 
             SavePower();
             UpdatePowerLimitsVerification();
@@ -1175,45 +1222,48 @@ namespace GHelper
 
         private void SavePower()
         {
-            labelTotal.Text = trackTotal.Value.ToString() + "W";
-            labelSlow.Text = trackSlow.Value.ToString() + "W";
-            labelCPU.Text = trackCPU.Value.ToString() + "W";
-            labelFast.Text = trackFast.Value.ToString() + "W";
+            if (CpuInfo.IsAMD)
+            {
+                labelTotal.Text = trackTotal.Value.ToString() + "W";
+                labelSlow.Text = trackSlow.Value.ToString() + "°C";
+                labelFast.Text = trackFast.Value.ToString();
+                labelCPU.Text = trackCPU.Value.ToString() + "W";
 
-            AppConfig.SetMode("limit_total", trackTotal.Value);
-            // sinkroniziraj
-            AppConfig.SetMode("limit_slow", trackSlow.Value);
-            AppConfig.SetMode("limit_cpu", trackCPU.Value);
-            AppConfig.SetMode("limit_fast", CpuInfo.IsAMD ? trackFast.Value : trackTotal.Value);
+                AppConfig.SetMode("limit_total", trackTotal.Value);
+                // On AMD, limit_slow and limit_fast are unified with limit_total for UXTU basic adaptive mode
+                AppConfig.SetMode("limit_slow", trackTotal.Value);
+                AppConfig.SetMode("limit_fast", trackTotal.Value);
+                
+                AppConfig.SetMode("cpu_temp", trackSlow.Value);
+                AppConfig.SetMode("cpu_uv", -trackFast.Value); // CPU UV is negative internally
+                AppConfig.SetMode("limit_cpu", trackCPU.Value);
+            }
+            else
+            {
+                labelTotal.Text = trackTotal.Value.ToString() + "W";
+                labelSlow.Text = trackSlow.Value.ToString() + "W";
+                labelCPU.Text = trackCPU.Value.ToString() + "W";
+                labelFast.Text = trackFast.Value.ToString() + "W";
+
+                AppConfig.SetMode("limit_total", trackTotal.Value);
+                AppConfig.SetMode("limit_slow", trackSlow.Value);
+                AppConfig.SetMode("limit_cpu", trackCPU.Value);
+                AppConfig.SetMode("limit_fast", trackTotal.Value);
+            }
         }
 
         private void TrackTotal_Scroll(object? sender, EventArgs e)
         {
-            if (CpuInfo.IsAMD)
-            {
-                if (trackSlow.Value < trackTotal.Value) trackSlow.Value = trackTotal.Value;
-                if (trackFast.Value < trackSlow.Value) trackFast.Value = trackSlow.Value;
-                if (trackCPU.Value > trackTotal.Value) trackCPU.Value = trackTotal.Value;
-            }
             SavePower();
         }
 
         private void TrackSlow_Scroll(object? sender, EventArgs e)
         {
-            if (CpuInfo.IsAMD)
-            {
-                if (trackSlow.Value < trackTotal.Value) trackTotal.Value = trackSlow.Value;
-                if (trackSlow.Value > trackFast.Value) trackFast.Value = trackSlow.Value;
-            }
             SavePower();
         }
 
         private void TrackFast_Scroll(object? sender, EventArgs e)
         {
-            if (CpuInfo.IsAMD)
-            {
-                if (trackFast.Value < trackSlow.Value) trackSlow.Value = trackFast.Value;
-            }
             SavePower();
         }
 
@@ -1277,10 +1327,29 @@ namespace GHelper
             LoadProfile(seriesCPU, AsusFan.CPU);
             LoadProfile(seriesGPU, AsusFan.GPU);
 
+            bool syncFans = AppConfig.Is("fan_sync");
+            checkSyncFans.Checked = syncFans;
+
+            if (syncFans)
+            {
+                chartGPU.Visible = false;
+                labelGPU.Visible = false;
+                chartCPU.ChartAreas[0].AxisY.Title = "System Fan Speed (%)";
+                chartCPU.Titles[0].Text = chartCPU.Titles[0].Text.Replace("CPU", "System");
+                if (chartCount == 2) chartCount = 1; // Decrease chart height
+            }
+            else
+            {
+                chartGPU.Visible = gpuVisible;
+                labelGPU.Visible = gpuVisible;
+                chartCPU.ChartAreas[0].AxisY.Title = "CPU Fan Speed (%)";
+            }
+
             bool autoFans = AppConfig.IsApplyPower() && AppConfig.IsFanRequired();
             bool applyFans = AppConfig.IsApplyFans();
 
             checkApplyFans.Checked = applyFans;
+            labelFans.Text = applyFans ? "Custom Fan Curves" : "Default Fan Curves";
 
             if (autoFans || applyFans)
             {
@@ -1315,10 +1384,18 @@ namespace GHelper
 
             if (reset || AsusACPI.IsInvalidCurve(curve))
             {
-                curve = Program.acpi.GetFanCurve(device, Modes.GetCurrentBase());
-                Logger.WriteLine($"Default Curve: {device} - {BitConverter.ToString(curve)}");
-                if (AsusACPI.IsInvalidCurve(curve))
+                if (AppConfig.IsOmen())
+                {
+                    // Use our custom default curves extracted from Omen Gaming Hub
                     curve = AppConfig.GetDefaultCurve(device);
+                }
+                else
+                {
+                    curve = Program.acpi.GetFanCurve(device, Modes.GetCurrentBase());
+                    Logger.WriteLine($"Default Curve: {device} - {BitConverter.ToString(curve)}");
+                    if (AsusACPI.IsInvalidCurve(curve))
+                        curve = AppConfig.GetDefaultCurve(device);
+                }
 
                 curve = AsusACPI.FixFanCurve(curve);
 
@@ -1369,6 +1446,7 @@ namespace GHelper
                 LoadProfile(seriesXGM, AsusFan.XGM, true);
 
             checkApplyFans.Checked = false;
+            labelFans.Text = "Default Fan Curves";
 
             seriesCPU.Color = Color.Gray;
             seriesGPU.Color = Color.Gray;
@@ -1385,8 +1463,8 @@ namespace GHelper
             AppConfig.RemoveMode("limit_cpu");
             AppConfig.RemoveMode("powermode");
 
-            trackUV.Value = CpuInfo.MaxCPUUV;
-            trackUViGPU.Value = CpuInfo.MaxIGPUUV;
+            trackUV.Value = 0;
+            trackUViGPU.Value = 45;
             trackTemp.Value = CpuInfo.DefaultTemp;
 
             AdvancedScroll();
@@ -1442,7 +1520,8 @@ namespace GHelper
             labelTip.Visible = false;
 
             SaveProfile(seriesCPU, AsusFan.CPU);
-            SaveProfile(seriesGPU, AsusFan.GPU);
+            if (!AppConfig.Is("fan_sync"))
+                SaveProfile(seriesGPU, AsusFan.GPU);
 
             if (AppConfig.Is("mid_fan"))
                 SaveProfile(seriesMid, AsusFan.Mid);
@@ -1523,7 +1602,8 @@ namespace GHelper
                     if (dx > tempMax) dx = tempMax;
 
                     if (dy < 0) dy = 0;
-                    if (dy > fansMax) dy = fansMax;
+                    int effectiveMax = GetEffectiveFansMax();
+                    if (dy > effectiveMax) dy = effectiveMax;
 
                     dymin = (dx - 70) * 1.2;
 
@@ -1536,8 +1616,19 @@ namespace GHelper
 
                         if (clampFanDots)
                         {
-                            double minX = 30 + (curIndex * 10);
-                            double maxX = minX + 9;
+                            double minX, maxX;
+                            if (AppConfig.IsOmen() && series.Points.Count == 12)
+                            {
+                                // 12-point Omen curves: 5°C spacing starting at 40°C
+                                minX = 40 + (curIndex * 5);
+                                maxX = minX + 4;
+                            }
+                            else
+                            {
+                                // 8-point curves: 10°C spacing starting at 30°C
+                                minX = 30 + (curIndex * 10);
+                                maxX = minX + 9;
+                            }
                             dx = Math.Max(minX, Math.Min(maxX, dx));
                         }
 

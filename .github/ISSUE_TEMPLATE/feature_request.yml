@@ -1,4 +1,4 @@
-name: Feature request
+dname: Feature request
 description: Suggest an idea for this project
 body:
   - type: checkboxes

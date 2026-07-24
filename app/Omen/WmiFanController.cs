@@ -808,6 +808,12 @@ namespace OmenCore.Hardware
         /// <summary>
         /// Enable maximum fan speed mode.
         /// </summary>
+        public bool? GetMaxFanSpeed()
+        {
+            if (!IsAvailable) return null;
+            return _wmiBios.GetFanMax();
+        }
+
         public bool SetMaxFanSpeed(bool enabled)
         {
             if (!IsAvailable)
@@ -1427,21 +1433,24 @@ namespace OmenCore.Hardware
                     if (rawRpm.HasValue)
                     {
                         telemetryUnavailable = false;
-                        int maxRpm = Math.Max(rawRpm.Value.fan1Rpm, rawRpm.Value.fan2Rpm);
-                        _logging?.Debug($"[VerifyMax] Attempt {attempt}/{attempts}: Raw RPM - CPU={rawRpm.Value.fan1Rpm}, GPU={rawRpm.Value.fan2Rpm}");
+                        int checkRpm = rawRpm.Value.fan1Rpm;
+                        if (_wmiBios.FanCount > 1 && rawRpm.Value.fan2Rpm > 0)
+                            checkRpm = Math.Min(rawRpm.Value.fan1Rpm, rawRpm.Value.fan2Rpm);
+
+                        _logging?.Debug($"[VerifyMax] Attempt {attempt}/{attempts}: Raw RPM - CPU={rawRpm.Value.fan1Rpm}, GPU={rawRpm.Value.fan2Rpm}, Checking {checkRpm} >= 3000");
                         
                         // For max mode, fans should be spinning fast (at least 3000 RPM)
                         // Lowered from 4000 to give faster verification on models that ramp slower
-                        if (maxRpm >= 3000)
+                        if (checkRpm >= 3000)
                         {
-                            _logging?.Info($"[VerifyMax] ✓ Verified: {maxRpm} RPM");
+                            _logging?.Info($"[VerifyMax] ✓ Verified: {checkRpm} RPM");
                             return true;
                         }
                         
                         // Check if increasing from baseline
-                        if (_lastCommandRpmBefore.HasValue && maxRpm > _lastCommandRpmBefore.Value + 500)
+                        if (_lastCommandRpmBefore.HasValue && checkRpm > _lastCommandRpmBefore.Value + 500)
                         {
-                            _logging?.Info($"[VerifyMax] ✓ RPM increased: {_lastCommandRpmBefore.Value} -> {maxRpm} (+{maxRpm - _lastCommandRpmBefore.Value})");
+                            _logging?.Info($"[VerifyMax] ✓ RPM increased: {_lastCommandRpmBefore.Value} -> {checkRpm} (+{checkRpm - _lastCommandRpmBefore.Value})");
                             return true;
                         }
                     }
@@ -1452,13 +1461,17 @@ namespace OmenCore.Hardware
                         if (fanLevel.HasValue)
                         {
                             telemetryUnavailable = false;
-                            int maxLevel = Math.Max(fanLevel.Value.fan1, fanLevel.Value.fan2);
-                            _logging?.Debug($"[VerifyMax] Attempt {attempt}/{attempts}: Fan level - CPU={fanLevel.Value.fan1}, GPU={fanLevel.Value.fan2}");
+                            
+                            int checkLevel = fanLevel.Value.fan1;
+                            if (_wmiBios.FanCount > 1 && fanLevel.Value.fan2 > 0)
+                                checkLevel = Math.Min(fanLevel.Value.fan1, fanLevel.Value.fan2);
+
+                            _logging?.Debug($"[VerifyMax] Attempt {attempt}/{attempts}: Fan level - CPU={fanLevel.Value.fan1}, GPU={fanLevel.Value.fan2}, Checking {checkLevel} >= 40");
                             
                             // Level 40+ indicates significant spin-up (works for both 0-55 and 0-100 ranges)
-                            if (maxLevel >= 40)
+                            if (checkLevel >= 40)
                             {
-                                _logging?.Info($"[VerifyMax] ✓ Verified via level: {maxLevel}");
+                                _logging?.Info($"[VerifyMax] ✓ Verified via level: {checkLevel}");
                                 return true;
                             }
                         }
@@ -1792,18 +1805,26 @@ namespace OmenCore.Hardware
             {
                 hasTelemetry = true;
                 int levelFloor = Math.Max(1, (int)Math.Round(_maxFanLevel * MaxModeHealthyLevelRatio));
-                int levelMax = Math.Max(fanLevels.Value.fan1, fanLevels.Value.fan2);
-                healthy |= levelMax >= levelFloor;
-                levelInfo = $"levels={fanLevels.Value.fan1}/{fanLevels.Value.fan2} floor={levelFloor}";
+                
+                int checkLevel = fanLevels.Value.fan1;
+                if (_wmiBios.FanCount > 1 && fanLevels.Value.fan2 > 0)
+                    checkLevel = Math.Min(fanLevels.Value.fan1, fanLevels.Value.fan2);
+
+                healthy |= checkLevel >= levelFloor;
+                levelInfo = $"levels={fanLevels.Value.fan1}/{fanLevels.Value.fan2} floor={levelFloor} check={checkLevel}";
             }
 
             var rpms = _wmiBios.GetFanRpmDirect();
             if (rpms.HasValue)
             {
                 hasTelemetry = true;
-                int rpmMax = Math.Max(rpms.Value.fan1Rpm, rpms.Value.fan2Rpm);
-                healthy |= rpmMax >= MaxModeHealthyRpmFloor;
-                rpmInfo = $"rpm={rpms.Value.fan1Rpm}/{rpms.Value.fan2Rpm} floor={MaxModeHealthyRpmFloor}";
+                
+                int checkRpm = rpms.Value.fan1Rpm;
+                if (_wmiBios.FanCount > 1 && rpms.Value.fan2Rpm > 0)
+                    checkRpm = Math.Min(rpms.Value.fan1Rpm, rpms.Value.fan2Rpm);
+
+                healthy |= checkRpm >= MaxModeHealthyRpmFloor;
+                rpmInfo = $"rpm={rpms.Value.fan1Rpm}/{rpms.Value.fan2Rpm} floor={MaxModeHealthyRpmFloor} check={checkRpm}";
             }
 
             // If telemetry is unavailable, prefer non-invasive keepalive over forced reapply.

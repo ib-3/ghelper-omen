@@ -26,6 +26,7 @@ namespace OmenCore.Hardware
         bool ApplyCustomCurve(IEnumerable<FanCurvePoint> curve);
         bool SetFanSpeed(int percent);
         bool SetFanSpeeds(int cpuPercent, int gpuPercent);
+        bool? GetMaxFanSpeed();
         bool SetMaxFanSpeed(bool enabled);
         bool SetPerformanceMode(string modeName);
         bool RestoreAutoControl();
@@ -117,6 +118,7 @@ namespace OmenCore.Hardware
         public bool ApplyCustomCurve(IEnumerable<FanCurvePoint> curve) => _controller.ApplyCustomCurve(curve);
         public bool SetFanSpeed(int percent) => _controller.SetFanSpeed(percent);
         public bool SetFanSpeeds(int cpuPercent, int gpuPercent) => _controller.SetFanSpeeds(cpuPercent, gpuPercent);
+        public bool? GetMaxFanSpeed() => _controller.GetMaxFanSpeed();
         public bool SetMaxFanSpeed(bool enabled) => _controller.SetMaxFanSpeed(enabled);
         public bool SetPerformanceMode(string modeName) => _controller.SetPerformanceMode(modeName);
         public bool RestoreAutoControl() => _controller.RestoreAutoControl();

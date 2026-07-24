@@ -1151,20 +1151,13 @@ namespace GHelper
 
         private void SetColorPicker(string colorField = "aura_color", PictureBox? preview = null)
         {
-            ColorDialog colorDlg = new ColorDialog();
-            colorDlg.AllowFullOpen = true;
-            colorDlg.Color = (preview ?? pictureColor).BackColor;
+            using GHelper.UI.ColorPickerForm colorDlg = new GHelper.UI.ColorPickerForm((preview ?? pictureColor).BackColor);
 
-            try
+            if (colorDlg.ShowDialog(this) == DialogResult.OK)
             {
-                colorDlg.CustomColors = AppConfig.GetString("aura_color_custom", "").Split('-').Select(int.Parse).ToArray();
-            }
-            catch (Exception ex) { }
-
-            if (colorDlg.ShowDialog() == DialogResult.OK)
-            {
-                AppConfig.Set("aura_color_custom", string.Join("-", colorDlg.CustomColors));
-                AppConfig.Set(colorField, colorDlg.Color.ToArgb());
+                Color c = colorDlg.SelectedColor;
+                AppConfig.Set(colorField, c.ToArgb());
+                (preview ?? pictureColor).BackColor = c;
                 SetAura();
             }
         }
@@ -1312,7 +1305,7 @@ namespace GHelper
                     else
                     {
                         Color[]? colors = Aura.HasSecondColor() ? new[] { Aura.Color1, Aura.Color2 } : new[] { Aura.Color1 };
-                        lightingSvc.SetKeyboardEffect(effect, 100, 5, colors);
+                        lightingSvc.SetKeyboardEffect(effect, 100, 5, 0, 0, colors);
                     }
                 }
                 else
@@ -1882,7 +1875,15 @@ namespace GHelper
 
             SetContextMenu();
 
-            panelGPU.Visible = gpuExists;
+            // Hide GPU mode selector on main screen for Victus laptops if the user disabled it in Extras
+            if (AppConfig.ContainsModel("Victus") && AppConfig.Is("hide_gpu_modes_victus"))
+            {
+                panelGPU.Visible = false;
+            }
+            else
+            {
+                panelGPU.Visible = gpuExists;
+            }
 
         }
 

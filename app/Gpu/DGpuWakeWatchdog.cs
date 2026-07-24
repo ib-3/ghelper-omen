@@ -14,7 +14,7 @@ namespace GHelper.Gpu
         
         private const int TRIGGER_THRESHOLD_WATTS = 10;
         private const int TRIGGER_CYCLES = 3;
-        private const int COOLDOWN_MS = 60000; // 60 seconds
+        private const int COOLDOWN_MS = 20000; // 20 seconds
         private const int PERIODIC_REAPPLY_MS = 300000; // 5 minutes
 
         public static void Check()
@@ -48,8 +48,9 @@ namespace GHelper.Gpu
                 double pkgPowerWatts = Program.acpi?.GetCpuPackagePowerWatts() ?? 0.0;
 
                 decimal systemPowerDraw = dischargeWatts - (decimal)pkgPowerWatts;
+                decimal threshold = 12.0m;
 
-                if (systemPowerDraw > TRIGGER_THRESHOLD_WATTS)
+                if (systemPowerDraw > threshold)
                 {
                     consecutiveHits++;
                     Logger.WriteLine($"[DGpuWakeWatchdog] High system power detected: {systemPowerDraw:F1}W (Discharge: {dischargeWatts:F1}W - Pkg: {pkgPowerWatts:F1}W). Hit {consecutiveHits}/{TRIGGER_CYCLES}");
@@ -87,6 +88,10 @@ namespace GHelper.Gpu
             {
                 try
                 {
+                    Logger.WriteLine("[DGpuWakeWatchdog] Forcing GPU into D0Hot via D3D11 to reset power state...");
+                    DGpuWakeHelper.ForceD0Hot();
+                    await Task.Delay(500);
+
                     Logger.WriteLine("[DGpuWakeWatchdog] Killing GPU apps...");
                     HardwareControl.KillGPUApps();
                     

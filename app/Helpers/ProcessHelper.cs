@@ -1,4 +1,4 @@
-﻿using System.Diagnostics;
+using System.Diagnostics;
 using System.Security.Principal;
 
 namespace GHelper.Helpers
@@ -129,7 +129,7 @@ namespace GHelper.Helpers
         {
             try
             {
-                string script = $"Get-Service -Name \"{serviceName}\" | Stop-Service -Force -PassThru | Set-Service -StartupType {disable}";
+                string script = $"$ErrorActionPreference = 'SilentlyContinue'; Get-Service -Name \"{serviceName}\" | Stop-Service -Force -PassThru | Set-Service -StartupType {disable}";
                 Logger.WriteLine(script);
                 RunCMD("powershell", script);
             }
@@ -143,7 +143,7 @@ namespace GHelper.Helpers
         {
             try
             {
-                string script = $"Set-Service -Name \"{serviceName}\" -Status running" + (automatic? " -StartupType Automatic":"");
+                string script = $"$ErrorActionPreference = 'SilentlyContinue'; Set-Service -Name \"{serviceName}\" -Status running" + (automatic? " -StartupType Automatic":"");
                 Logger.WriteLine(script);
                 RunCMD("powershell", script);
             }

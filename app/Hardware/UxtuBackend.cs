@@ -5,7 +5,7 @@ namespace OmenCore.Hardware
 {
     public static class UxtuBackend
     {
-        public static bool ApplyPowerLimits(int stapmW, int fastW, int slowW)
+        public static bool ApplyPowerLimits(int stapmW, int fastW, int slowW, int? tctlTemp = null, int? cHTCTemp = null, int? skinTemp = null)
         {
             var cliPath = UxtuDetection.FindRyzenAdj() ?? UxtuDetection.FindUxtuCli();
             if (cliPath == null) return false;
@@ -18,6 +18,10 @@ namespace OmenCore.Hardware
                 var slowMw = slowW * 1000;
 
                 string args = $"--stapm-limit={stapmMw} --fast-limit={fastMw} --slow-limit={slowMw}";
+
+                if (tctlTemp.HasValue) args += $" --tctl-temp={tctlTemp.Value}";
+                if (cHTCTemp.HasValue) args += $" --cHTC-temp={cHTCTemp.Value}";
+                if (skinTemp.HasValue) args += $" --apu-skin-temp={skinTemp.Value}";
 
                 Logger.WriteLine($"[UxtuBackend] Running: \"{cliPath}\" {args}");
 
@@ -54,6 +58,34 @@ namespace OmenCore.Hardware
             }
 
             return false;
+        }
+
+        public static bool ApplyPreset(int mode, int? customLimitW = null, int? customTemp = null)
+        {
+            // Map GHelper mode to UXTU preset
+            // 0 = Balanced, 1 = Turbo, 2 = Silent
+            int tempLimit = 85;
+            int powerW = 28;
+
+            if (mode == 2) // Silent / Eco
+            {
+                tempLimit = 75;
+                powerW = 15;
+            }
+            else if (mode == 1) // Turbo / Extreme
+            {
+                tempLimit = 95;
+                powerW = 65; // Safe default for extreme if no custom limit
+            }
+
+            // Override with GHelper slider values if enabled
+            if (customTemp.HasValue && customTemp.Value > 0)
+                tempLimit = customTemp.Value;
+
+            if (customLimitW.HasValue && customLimitW.Value > 0)
+                powerW = customLimitW.Value;
+
+            return ApplyPowerLimits(powerW, powerW, powerW, tempLimit, tempLimit, tempLimit);
         }
 
         public static bool ApplyCurveOptimizer(int offset)

@@ -122,11 +122,9 @@ namespace GHelper
             checkStatusLed = new CheckBox();
             checkAspm = new CheckBox();
             checkOmenMax = new CheckBox();
-            comboOmenFanControl = new RComboBox();
-            labelOmenFanControl = new Label();
-            panelOmenMaxRPM = new Panel();
-            numericOmenMaxRPM = new NumericUpDownWithUnit();
-            labelOmenMaxRPM = new Label();
+            panelOmenMaxFan = new Panel();
+            labelOmenMaxFan = new Label();
+            numericOmenMaxFan = new RNumericUpDown();
             checkDonate = new CheckBox();
             panelPower = new Panel();
             numericHibernateAfter = new NumericUpDownWithUnit();
@@ -173,10 +171,10 @@ namespace GHelper
             ((System.ComponentModel.ISupportInitialize)pictureLog).BeginInit();
             ((System.ComponentModel.ISupportInitialize)pictureSettings).BeginInit();
             panelSettings.SuspendLayout();
+            panelOmenMaxFan.SuspendLayout();
+            ((System.ComponentModel.ISupportInitialize)numericOmenMaxFan).BeginInit();
             panelPower.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)numericHibernateAfter).BeginInit();
-            panelOmenMaxRPM.SuspendLayout();
-            ((System.ComponentModel.ISupportInitialize)numericOmenMaxRPM).BeginInit();
             ((System.ComponentModel.ISupportInitialize)pictureHibernate).BeginInit();
             panelAPU.SuspendLayout();
             ((System.ComponentModel.ISupportInitialize)pictureAPUMem).BeginInit();
@@ -1212,10 +1210,8 @@ namespace GHelper
             panelSettings.Controls.Add(checkNVPlatform);
             panelSettings.Controls.Add(checkStatusLed);
             panelSettings.Controls.Add(checkAspm);
-            panelSettings.Controls.Add(panelOmenMaxRPM);
-            panelSettings.Controls.Add(comboOmenFanControl);
-            panelSettings.Controls.Add(labelOmenFanControl);
             panelSettings.Controls.Add(checkOmenMax);
+            panelSettings.Controls.Add(panelOmenMaxFan);
             panelSettings.Controls.Add(checkDonate);
             panelSettings.Dock = DockStyle.Top;
             panelSettings.Location = new Point(15, 1252);
@@ -1340,64 +1336,39 @@ namespace GHelper
             checkOmenMax.Text = "Omen: Replace Turbo with Max Fan Mode (turn off custom curve)";
             checkOmenMax.UseVisualStyleBackColor = true;
             // 
-            // labelOmenFanControl
+            // panelOmenMaxFan
             // 
-            labelOmenFanControl.AutoSize = true;
-            labelOmenFanControl.Dock = DockStyle.Top;
-            labelOmenFanControl.Location = new Point(21, 284);
-            labelOmenFanControl.Margin = new Padding(5, 3, 5, 3);
-            labelOmenFanControl.Name = "labelOmenFanControl";
-            labelOmenFanControl.Padding = new Padding(3);
-            labelOmenFanControl.Size = new Size(917, 42);
-            labelOmenFanControl.TabIndex = 3;
-            labelOmenFanControl.Text = "Omen: Fan Control Mode";
+            panelOmenMaxFan.Controls.Add(labelOmenMaxFan);
+            panelOmenMaxFan.Controls.Add(numericOmenMaxFan);
+            panelOmenMaxFan.Dock = DockStyle.Top;
+            panelOmenMaxFan.Location = new Point(21, 284);
+            panelOmenMaxFan.Margin = new Padding(5, 3, 5, 3);
+            panelOmenMaxFan.Name = "panelOmenMaxFan";
+            panelOmenMaxFan.Padding = new Padding(3);
+            panelOmenMaxFan.Size = new Size(917, 48);
+            panelOmenMaxFan.TabIndex = 3;
             // 
-            // comboOmenFanControl
+            // labelOmenMaxFan
             // 
-            comboOmenFanControl.Dock = DockStyle.Top;
-            comboOmenFanControl.DropDownStyle = ComboBoxStyle.DropDownList;
-            comboOmenFanControl.FormattingEnabled = true;
-            comboOmenFanControl.Location = new Point(21, 326);
-            comboOmenFanControl.Margin = new Padding(5);
-            comboOmenFanControl.Name = "comboOmenFanControl";
-            comboOmenFanControl.Size = new Size(917, 33);
-            comboOmenFanControl.TabIndex = 4;
+            labelOmenMaxFan.AutoSize = true;
+            labelOmenMaxFan.Location = new Point(6, 9);
+            labelOmenMaxFan.Name = "labelOmenMaxFan";
+            labelOmenMaxFan.Size = new Size(200, 32);
+            labelOmenMaxFan.TabIndex = 0;
+            labelOmenMaxFan.Text = "Omen Max Fan RPM (x100):";
             // 
-            // panelOmenMaxRPM
+            // numericOmenMaxFan
             // 
-            panelOmenMaxRPM.Controls.Add(numericOmenMaxRPM);
-            panelOmenMaxRPM.Controls.Add(labelOmenMaxRPM);
-            panelOmenMaxRPM.Dock = DockStyle.Top;
-            panelOmenMaxRPM.Location = new Point(21, 359);
-            panelOmenMaxRPM.Margin = new Padding(5, 3, 5, 3);
-            panelOmenMaxRPM.Name = "panelOmenMaxRPM";
-            panelOmenMaxRPM.Size = new Size(917, 50);
-            panelOmenMaxRPM.TabIndex = 5;
-            // 
-            // numericOmenMaxRPM
-            // 
-            numericOmenMaxRPM.Anchor = AnchorStyles.Top | AnchorStyles.Right;
-            numericOmenMaxRPM.Increment = new decimal(new int[] { 100, 0, 0, 0 });
-            numericOmenMaxRPM.Location = new Point(715, 5);
-            numericOmenMaxRPM.Margin = new Padding(5, 3, 5, 3);
-            numericOmenMaxRPM.Maximum = new decimal(new int[] { 8000, 0, 0, 0 });
-            numericOmenMaxRPM.Minimum = new decimal(new int[] { 1000, 0, 0, 0 });
-            numericOmenMaxRPM.Name = "numericOmenMaxRPM";
-            numericOmenMaxRPM.Size = new Size(202, 39);
-            numericOmenMaxRPM.TabIndex = 1;
-            numericOmenMaxRPM.Unit = "RPM";
-            numericOmenMaxRPM.UnitFirst = false;
-            numericOmenMaxRPM.Value = new decimal(new int[] { 5500, 0, 0, 0 });
-            // 
-            // labelOmenMaxRPM
-            // 
-            labelOmenMaxRPM.AutoSize = true;
-            labelOmenMaxRPM.Location = new Point(0, 10);
-            labelOmenMaxRPM.Margin = new Padding(5, 0, 5, 0);
-            labelOmenMaxRPM.Name = "labelOmenMaxRPM";
-            labelOmenMaxRPM.Size = new Size(200, 32);
-            labelOmenMaxRPM.TabIndex = 0;
-            labelOmenMaxRPM.Text = "Omen: Max Fan Speed";
+            numericOmenMaxFan.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            numericOmenMaxFan.Location = new Point(776, 6);
+            numericOmenMaxFan.Maximum = new decimal(new int[] { 100, 0, 0, 0 });
+            numericOmenMaxFan.Minimum = new decimal(new int[] { 10, 0, 0, 0 });
+            numericOmenMaxFan.Name = "numericOmenMaxFan";
+            numericOmenMaxFan.Size = new Size(130, 39);
+            numericOmenMaxFan.TabIndex = 1;
+            numericOmenMaxFan.Value = new decimal(new int[] { 60, 0, 0, 0 });
+            numericOmenMaxFan.Increment = 1;
+            numericOmenMaxFan.DecimalPlaces = 0;
             //
             // checkNVPlatform
             // 
@@ -1803,6 +1774,9 @@ namespace GHelper
             ((System.ComponentModel.ISupportInitialize)pictureScan).EndInit();
             ((System.ComponentModel.ISupportInitialize)pictureLog).EndInit();
             ((System.ComponentModel.ISupportInitialize)pictureSettings).EndInit();
+            panelOmenMaxFan.ResumeLayout(false);
+            panelOmenMaxFan.PerformLayout();
+            ((System.ComponentModel.ISupportInitialize)numericOmenMaxFan).EndInit();
             panelSettings.ResumeLayout(false);
             panelSettings.PerformLayout();
             panelPower.ResumeLayout(false);
@@ -1898,11 +1872,9 @@ namespace GHelper
         private CheckBox checkGpuApps;
         private CheckBox checkDonate;
         private CheckBox checkOmenMax;
-        private RComboBox comboOmenFanControl;
-        private Label labelOmenFanControl;
-        private Panel panelOmenMaxRPM;
-        private NumericUpDownWithUnit numericOmenMaxRPM;
-        private Label labelOmenMaxRPM;
+        private Panel panelOmenMaxFan;
+        private Label labelOmenMaxFan;
+        private RNumericUpDown numericOmenMaxFan;
         private PictureBox pictureBacklight;
         private Label labelBacklightTitle;
         private PictureBox pictureService;

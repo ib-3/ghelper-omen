@@ -165,9 +165,32 @@ internal sealed class OmenBackend : IDisposable
                 int maxFanOverride = AppConfig.Get("omen_max_fan_level", 0);
                 
                 var wmiController = new OmenCore.Hardware.WmiFanController(null, logging, maxFanOverride, injectedWmiBios: bios);
-                fans = new OmenCore.Hardware.WmiFanControllerWrapper(wmiController, logging);
+                var wmiFans = new OmenCore.Hardware.WmiFanControllerWrapper(wmiController, logging);
+
+                var ecAccess = OmenCore.Hardware.EcAccessFactory.GetEcAccess();
+                if (ecAccess != null && ecAccess.IsAvailable && bios.ThermalPolicy < OmenCore.Hardware.HpWmiBios.ThermalPolicyVersion.V2)
+                {
+                    var registerMap = new System.Collections.Generic.Dictionary<string, int>(); 
+                    var baseController = new OmenCore.Hardware.FanController(ecAccess, registerMap, null, logging, bios);
+                    if (baseController.IsEcReady)
+                    {
+                        fans = new OmenCore.Hardware.EcFanControllerWrapper(baseController, null, logging);
+                        Logger.WriteLine($"OMEN backend: Using EC Fan Controller for true hardware RPM (V0/V1).");
+                    }
+                    else
+                    {
+                        fans = wmiFans;
+                        Logger.WriteLine($"OMEN backend: Using WMI Fan Controller (EC init failed).");
+                    }
+                }
+                else
+                {
+                    fans = wmiFans;
+                    string reason = (bios.ThermalPolicy >= OmenCore.Hardware.HpWmiBios.ThermalPolicyVersion.V2) ? "ThermalPolicy V2+" : "EC not available";
+                    Logger.WriteLine($"OMEN backend: Using WMI Fan Controller ({reason}).");
+                }
+                
                 Program.OmenFans = fans;
-                Logger.WriteLine($"OMEN backend: Using pure WMI Fan Controller.");
             }
             catch (Exception ex)
             {
@@ -188,7 +211,11 @@ internal sealed class OmenBackend : IDisposable
 
             try
             {
-                monitor = new WmiBiosMonitor(logging, nvapi);
+                if (bios != null && bios.ThermalPolicy >= OmenCore.Hardware.HpWmiBios.ThermalPolicyVersion.V2)
+                {
+                    // [NEW] Provide logging and nvapi instances
+                    monitor = new WmiBiosMonitor(logging, nvapi);
+                }
             }
             catch (Exception ex)
             {
@@ -393,6 +420,8 @@ internal sealed class OmenBackend : IDisposable
         return true;
     }
 
+    private static OmenCore.Hardware.RyzenTemperatureProvider? _ryzenTempProvider = null;
+
     public bool TryDeviceGet(uint deviceId, out int result)
     {
         // [NEW] Temperature interception logic using high-precision monitor
@@ -425,7 +454,7 @@ internal sealed class OmenBackend : IDisposable
                 }
                 catch (Exception ex)
                 {
-                    Logger.WriteLine($"[OmenBackend.TryDeviceGet] Monitor.ReadSampleAsync failed: {ex.GetType().Name}: {ex.Message}");
+                    Logger.WriteLine($"[OmenBackend.TryDeviceGet] Temp fetch failed: {ex.Message}");
                 }
             }
         }
@@ -440,7 +469,7 @@ internal sealed class OmenBackend : IDisposable
             AsusACPI.DevsCPUFan or AsusACPI.DevsGPUFan => IsAvailable ? 1 : -1,
             
             // [MODIFIED] High-precision path above intercepting; switched to legacy fallbacks here
-            AsusACPI.Temp_CPU => (int)(_bios?.GetTemperature() ?? -1),
+            AsusACPI.Temp_CPU => -1, // Force HardwareControl.cs to use the PerfCounter fallback (TSZ0) instead of broken HP WMI
             AsusACPI.Temp_GPU => (int)(_bios?.GetGpuTemperature() ?? -1),
             /* [LEGACY GET]
             AsusACPI.Temp_CPU => (int)(_bios?.GetTemperature() ?? -1),
@@ -496,6 +525,7 @@ internal sealed class OmenBackend : IDisposable
     }
 
     private OmenCore.Hardware.AmdUndervoltProvider? _amdPowerProvider;
+    private bool _amdSmuWriteFailLogged = false;
 
     private bool SetCpuPowerLimit(uint deviceId, int watts)
     {
@@ -510,22 +540,41 @@ internal sealed class OmenBackend : IDisposable
             if (_amdPowerProvider == null)
             {
                 try { _amdPowerProvider = new OmenCore.Hardware.AmdUndervoltProvider(); }
-                catch { return false; }
+                catch { Logger.WriteLine("OmenPowerLimit: Failed to init AmdUndervoltProvider, falling back."); }
             }
 
-            uint valueMw = (uint)(watts * 1000);
-            OmenCore.Hardware.RyzenSmu.SmuStatus status = OmenCore.Hardware.RyzenSmu.SmuStatus.Failed;
+            if (_amdPowerProvider != null)
+            {
+                uint valueMw = (uint)(watts * 1000);
+                OmenCore.Hardware.RyzenSmu.SmuStatus status = OmenCore.Hardware.RyzenSmu.SmuStatus.Failed;
 
-            if (deviceId == AsusACPI.PPT_APUA3) // SPL
-                status = _amdPowerProvider.SetStapmLimit(valueMw);
-            else if (deviceId == AsusACPI.PPT_APUA0) // sPPT
-                status = _amdPowerProvider.SetSlowPptLimit(valueMw);
-            else if (deviceId == AsusACPI.PPT_APUC1) // fPPT
-                status = _amdPowerProvider.SetFastPptLimit(valueMw);
+                if (deviceId == AsusACPI.PPT_APUA3) // SPL
+                    status = _amdPowerProvider.SetStapmLimit(valueMw);
+                else if (deviceId == AsusACPI.PPT_APUA0) // sPPT
+                    status = _amdPowerProvider.SetSlowPptLimit(valueMw);
+                else if (deviceId == AsusACPI.PPT_APUC1) // fPPT
+                    status = _amdPowerProvider.SetFastPptLimit(valueMw);
 
-            bool success = status == OmenCore.Hardware.RyzenSmu.SmuStatus.Ok;
-            Logger.WriteLine($"OmenPowerLimit: AMD SMU write {(success ? "OK" : $"FAILED ({status})")} — {watts}W");
-            return success;
+                bool success = status == OmenCore.Hardware.RyzenSmu.SmuStatus.Ok;
+                if (!success)
+                {
+                    if (!_amdSmuWriteFailLogged)
+                    {
+                        Logger.WriteLine($"OmenPowerLimit: AMD SMU write FAILED ({status}) — {watts}W");
+                        _amdSmuWriteFailLogged = true;
+                    }
+                }
+                else
+                {
+                    if (_amdSmuWriteFailLogged)
+                    {
+                        _amdSmuWriteFailLogged = false;
+                    }
+                    Logger.WriteLine($"OmenPowerLimit: AMD SMU write OK — {watts}W");
+                }
+                
+                if (success) return true;
+            }
         }
 
         if (deviceId == AsusACPI.PPT_APUA3)
@@ -691,14 +740,8 @@ internal sealed class OmenBackend : IDisposable
 
     public bool TryGetFanCurve(AsusFan device, int mode, out byte[]? curve)
     {
-        curve = device switch
-        {
-            AsusFan.CPU => _curves[(int)AsusFan.CPU].ToArray(),
-            AsusFan.GPU => _curves[(int)AsusFan.GPU].ToArray(),
-            _ => null
-        };
-
-        return curve != null;
+        curve = null;
+        return false;
     }
 
     private double _ewmaCpuTemp = -1;
@@ -727,6 +770,13 @@ internal sealed class OmenBackend : IDisposable
         int cpuTempRaw = (int)(HardwareControl.GetCPUTemp() ?? _bios?.GetTemperature() ?? 0);
         int gpuTempRaw = (int)(HardwareControl.GetGPUTemp() ?? _bios?.GetGpuTemperature() ?? _bios?.GetTemperature() ?? 0);
 
+        if (AppConfig.Is("fan_sync"))
+        {
+            int maxTemp = Math.Max(cpuTempRaw, gpuTempRaw);
+            cpuTempRaw = maxTemp;
+            gpuTempRaw = maxTemp;
+        }
+
         // HP's Lamda_Increase and Lamda_Decrease constants from SwFanControlCustomFanCurve
         const double lamdaIncrease = 0.1;
         const double lamdaDecrease = 0.1;
@@ -745,6 +795,11 @@ internal sealed class OmenBackend : IDisposable
 
         int cpuPercent = EvaluateCurve(_curves[(int)AsusFan.CPU], (int)Math.Round(_ewmaCpuTemp));
         int gpuPercent = EvaluateCurve(_curves[(int)AsusFan.GPU], (int)Math.Round(_ewmaGpuTemp));
+
+        if (AppConfig.Get("gpu_mode") == AsusACPI.GPUModeEco)
+        {
+            gpuPercent = cpuPercent;
+        }
 
         // Deduplicate calls to avoid WMI log spam when temperature fluctuates but curve flatlines
         if (cpuPercent == _lastEvaluatedCpuPercent && gpuPercent == _lastEvaluatedGpuPercent)
@@ -765,8 +820,31 @@ internal sealed class OmenBackend : IDisposable
     {
         try
         {
-            var sample = Task.Run(() => _monitor.ReadSampleAsync(default)).GetAwaiter().GetResult();
-            int rawRpm = cpu ? sample.Fan1Rpm : sample.Fan2Rpm;
+            int rawRpm = 0;
+            if (_monitor != null)
+            {
+                var sample = Task.Run(() => _monitor.ReadSampleAsync(default)).GetAwaiter().GetResult();
+                rawRpm = cpu ? sample.Fan1Rpm : sample.Fan2Rpm;
+            }
+
+            // [FIX] If WMI gives us nothing (0 RPM), fallback to the IFanController which has access to LibreHardwareMonitor / EC
+            if (rawRpm <= 0 && _fans != null)
+            {
+                var fanSpeeds = _fans.ReadFanSpeeds().ToList();
+                if (cpu)
+                {
+                    var cpuFan = fanSpeeds.FirstOrDefault(f => f.Name.Contains("CPU", StringComparison.OrdinalIgnoreCase) || f.Name.Contains("System", StringComparison.OrdinalIgnoreCase));
+                    if (cpuFan != null) rawRpm = cpuFan.SpeedRpm;
+                    else if (fanSpeeds.Count > 0) rawRpm = fanSpeeds[0].SpeedRpm;
+                }
+                else
+                {
+                    var gpuFan = fanSpeeds.FirstOrDefault(f => f.Name.Contains("GPU", StringComparison.OrdinalIgnoreCase));
+                    if (gpuFan != null) rawRpm = gpuFan.SpeedRpm;
+                    else if (fanSpeeds.Count > 1) rawRpm = fanSpeeds[1].SpeedRpm;
+                }
+            }
+
             // GHelper's FormatFan expects duty-cycle units (0-100).
             // When fanRpm mode is on it displays value*100 as RPM,
             // so divide actual RPM by 100: 2400 RPM → 24 → displayed as "2400 RPM".

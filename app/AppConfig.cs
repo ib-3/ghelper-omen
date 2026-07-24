@@ -229,20 +229,27 @@ public static class AppConfig
         int mode = Modes.GetCurrent();
         string name;
 
-        switch (device)
+        if (AppConfig.Is("fan_sync") && (device == AsusFan.CPU || device == AsusFan.GPU))
         {
-            case AsusFan.GPU:
-                name = "gpu";
-                break;
-            case AsusFan.Mid:
-                name = "mid";
-                break;
-            case AsusFan.XGM:
-                name = "xgm";
-                break;
-            default:
-                name = "cpu";
-                break;
+            name = "sync";
+        }
+        else
+        {
+            switch (device)
+            {
+                case AsusFan.GPU:
+                    name = "gpu";
+                    break;
+                case AsusFan.Mid:
+                    name = "mid";
+                    break;
+                case AsusFan.XGM:
+                    name = "xgm";
+                    break;
+                default:
+                    name = "cpu";
+                    break;
+            }
         }
 
         return paramName + "_" + name + "_" + mode;
@@ -261,6 +268,17 @@ public static class AppConfig
             curve = GetDefaultCurve(device);
 
         return curve;
+    }
+
+    public static int GetDefaultGpuPowerLimit(int maxLimit)
+    {
+        int mode = Modes.GetCurrentBase();
+        return mode switch
+        {
+            2 => 30, // Silent
+            0 => 60, // Balanced
+            _ => maxLimit // Turbo
+        };
     }
 
     public static void SetFanConfig(AsusFan device, byte[] curve)
@@ -283,21 +301,43 @@ public static class AppConfig
 
         if (IsOmen())
         {
+            byte[] curve;
             switch (mode)
             {
                 case AsusACPI.PerformanceTurbo:
                     // Turbo curve temps: 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 100
                     // Turbo curve fan speeds: 20, 30, 40, 50, 60, 70, 80, 90, 100, 100, 100, 100
-                    return StringToBytes("28-2D-32-37-3C-41-46-4B-50-55-5A-64-14-1E-28-32-3C-46-50-5A-64-64-64-64");
+                    curve = StringToBytes("28-2D-32-37-3C-41-46-4B-50-55-5A-64-14-1E-28-32-3C-46-50-5A-64-64-64-64");
+                    break;
                 case AsusACPI.PerformanceSilent:
                     // Silent curve temps: 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 100
                     // Silent curve fan speeds: 0, 0, 0, 10, 20, 30, 40, 50, 60, 70, 80, 100
-                    return StringToBytes("28-2D-32-37-3C-41-46-4B-50-55-5A-64-00-00-00-0A-14-1E-28-32-3C-46-50-64");
+                    curve = StringToBytes("28-2D-32-37-3C-41-46-4B-50-55-5A-64-00-00-00-0A-14-1E-28-32-3C-46-50-64");
+                    break;
                 default:
                     // Balanced curve temps: 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90, 100
                     // Balanced curve fan speeds: 0, 10, 20, 30, 40, 45, 50, 60, 70, 80, 90, 100
-                    return StringToBytes("28-2D-32-37-3C-41-46-4B-50-55-5A-64-00-0A-14-1E-28-2D-32-3C-46-50-5A-64");
+                    curve = StringToBytes("28-2D-32-37-3C-41-46-4B-50-55-5A-64-00-0A-14-1E-28-2D-32-3C-46-50-5A-64");
+                    break;
             }
+
+            // Scale fan speed values for V2 laptops
+            // V2 uses percentage-based levels where level N = N*100 RPM
+            // Default curves assume 100 = max, but on V2 the actual max is omen_max_fan_level (e.g. 60 = 6000 RPM)
+            if (GHelper.Program.acpi?.IsOmenV2() == true)
+            {
+                int maxLevel = Get("omen_max_fan_level", 0);
+                if (maxLevel > 0 && maxLevel < 100)
+                {
+                    int count = curve.Length / 2;
+                    for (int i = count; i < curve.Length; i++)
+                    {
+                        curve[i] = (byte)Math.Min(maxLevel, curve[i] * maxLevel / 100);
+                    }
+                }
+            }
+
+            return curve;
         }
         else
         {

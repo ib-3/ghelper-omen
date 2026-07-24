@@ -462,12 +462,12 @@ namespace OmenCore.Hardware
                 SupportsFanControlWmi = true,
                 SupportsFanCurves = true,
                 FanZoneCount = 2,
-                MaxFanLevel = 55,
+                MaxFanLevel = 60,
                 SupportsPerformanceModes = true,
                 HasMuxSwitch = true,
                 SupportsGpuPowerBoost = true,
                 HasFourZoneRgb = true,
-                Notes = "2024 AMD model - V1 fan control, MaxFanLevel=55"
+                Notes = "2024 AMD model - V1 fan control, MaxFanLevel=60 for 6000 RPM"
             });
             
             // OMEN 16 (2025) - ap0xxx series (AMD Ryzen AI + RTX 50-series)
@@ -815,8 +815,8 @@ namespace OmenCore.Hardware
             AddModel(new ModelCapabilities
             {
                 ProductId = "8C58",
-                ModelName = "OMEN Transcend 14 (2024) fb1xxx",
-                ModelNamePattern = "14-fb1",
+                ModelName = "OMEN Transcend 14 (2024) fb series",
+                ModelNamePattern = "14-fb",
                 ModelYear = 2024,
                 Family = OmenModelFamily.Transcend,
                 SupportsFanControlWmi = true,
@@ -824,7 +824,7 @@ namespace OmenCore.Hardware
                 SupportsFanCurves = false,
                 SupportsIndependentFanCurves = false,
                 FanZoneCount = 1,
-                HasMuxSwitch = true,
+                HasMuxSwitch = false,
                 SupportsGpuPowerBoost = true,
                 HasFourZoneRgb = false,
                 HasPerKeyRgb = true,
@@ -845,7 +845,7 @@ namespace OmenCore.Hardware
                 SupportsFanCurves = false,
                 SupportsIndependentFanCurves = false,
                 FanZoneCount = 1,
-                HasMuxSwitch = true,
+                HasMuxSwitch = false,
                 SupportsGpuPowerBoost = true,
                 HasFourZoneRgb = false,
                 HasPerKeyRgb = true,

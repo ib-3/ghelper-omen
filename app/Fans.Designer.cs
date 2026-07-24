@@ -68,6 +68,7 @@ namespace GHelper
 
             labelFansResult = new Label();
             checkApplyFans = new RCheckBox();
+            checkSyncFans = new RCheckBox();
             buttonReset = new RButton();
             comboBoost = new RComboBox();
             panelSliders = new Panel();
@@ -596,6 +597,7 @@ namespace GHelper
 
             panelApplyFans.Controls.Add(labelFansResult);
             panelApplyFans.Controls.Add(checkApplyFans);
+            panelApplyFans.Controls.Add(checkSyncFans);
             panelApplyFans.Controls.Add(buttonReset);
             panelApplyFans.Dock = DockStyle.Bottom;
             panelApplyFans.Location = new Point(0, 984);
@@ -619,17 +621,31 @@ namespace GHelper
             // 
             // checkApplyFans
             // 
-            checkApplyFans.Anchor = AnchorStyles.Bottom | AnchorStyles.Right;
-            checkApplyFans.AutoSize = true;
+            checkApplyFans.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            checkApplyFans.AutoSize = false;
             checkApplyFans.BackColor = SystemColors.ControlLight;
-            checkApplyFans.Location = new Point(454, 42);
+            checkApplyFans.Location = new Point(280, 60);
             checkApplyFans.Margin = new Padding(0);
             checkApplyFans.Name = "checkApplyFans";
             checkApplyFans.Padding = new Padding(16, 6, 16, 6);
-            checkApplyFans.Size = new Size(341, 48);
+            checkApplyFans.Size = new Size(500, 48);
             checkApplyFans.TabIndex = 19;
             checkApplyFans.Text = Properties.Strings.ApplyFanCurve;
             checkApplyFans.UseVisualStyleBackColor = false;
+            // 
+            // checkSyncFans
+            // 
+            checkSyncFans.Anchor = AnchorStyles.Bottom | AnchorStyles.Left;
+            checkSyncFans.AutoSize = false;
+            checkSyncFans.BackColor = SystemColors.ControlLight;
+            checkSyncFans.Location = new Point(280, 12); // Stacked above checkApplyFans
+            checkSyncFans.Margin = new Padding(0);
+            checkSyncFans.Name = "checkSyncFans";
+            checkSyncFans.Padding = new Padding(16, 6, 16, 6);
+            checkSyncFans.Size = new Size(500, 48);
+            checkSyncFans.TabIndex = 20;
+            checkSyncFans.Text = "Sync Fans";
+            checkSyncFans.UseVisualStyleBackColor = false;
             // 
             // buttonReset
             // 
@@ -818,9 +834,9 @@ namespace GHelper
             labelLeftUViGPU.Location = new Point(10, 10);
             labelLeftUViGPU.Margin = new Padding(4, 0, 4, 0);
             labelLeftUViGPU.Name = "labelLeftUViGPU";
-            labelLeftUViGPU.Size = new Size(65, 32);
+            labelLeftUViGPU.Size = new Size(130, 32);
             labelLeftUViGPU.TabIndex = 12;
-            labelLeftUViGPU.Text = "iGPU";
+            labelLeftUViGPU.Text = "Max Power Limit (W)";
             // 
             // trackUViGPU
             // 
@@ -866,9 +882,9 @@ namespace GHelper
             labelLeftUV.Location = new Point(10, 10);
             labelLeftUV.Margin = new Padding(4, 0, 4, 0);
             labelLeftUV.Name = "labelLeftUV";
-            labelLeftUV.Size = new Size(58, 32);
+            labelLeftUV.Size = new Size(150, 32);
             labelLeftUV.TabIndex = 12;
-            labelLeftUV.Text = "CPU";
+            labelLeftUV.Text = "Max Curve Optimizer (-)";
             // 
             // trackUV
             // 
@@ -2113,6 +2129,7 @@ namespace GHelper
         private Panel panelApplyFans;
         private Label labelFansResult;
         private RCheckBox checkApplyFans;
+        private RCheckBox checkSyncFans;
         private RButton buttonReset;
         private Label labelBoost;
         private RComboBox comboBoost;

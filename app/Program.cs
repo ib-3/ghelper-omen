@@ -93,6 +93,9 @@ namespace GHelper
             // One-time startup checks: warn if not running as admin, or if PawnIO is not installed.
             // Both checks are dismissed after first show so they don't nag on every launch.
             StartupChecks.Run();
+            
+            // Start Asus services on launch per user request
+            AsusService.StartAsusServices();
 
             settingsForm = new SettingsForm();
             modeControl = new ModeControl();
@@ -460,6 +463,7 @@ namespace GHelper
 
         static void OnExit(object sender, EventArgs e)
         {
+
             if (trayIcon is not null)
             {
                 trayIcon.Visible = false;

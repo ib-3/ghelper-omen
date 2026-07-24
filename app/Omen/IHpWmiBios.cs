@@ -17,6 +17,7 @@ namespace OmenCore.Hardware
         (int fan1Rpm, int fan2Rpm)? GetFanRpmDirect();
         (byte fan1, byte fan2)? GetFanLevel();
 
+        bool? GetFanMax();
         bool SetFanMax(bool enabled);
         bool SetFanLevel(byte fan1, byte fan2);
         bool SetFanMode(HpWmiBios.FanMode mode);

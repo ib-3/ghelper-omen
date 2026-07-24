@@ -278,9 +278,26 @@ namespace GHelper.Mode
                     });
                 }
 
-            } else
+            }
+            else if (Program.acpi.IsOmen())
+            {
+                // Omen BIOS auto-fan control is unstable and pulses frequently on V2 devices.
+                // When "Apply Custom Fan Curve" is unchecked, instead of handing control 
+                // back to the BIOS, we continue to enforce our own hardcoded default curves
+                // that provide a much smoother and better experience.
+                int cpuResult = Program.acpi.SetFanCurve(AsusFan.CPU, AppConfig.GetDefaultCurve(AsusFan.CPU));
+                int gpuResult = Program.acpi.SetFanCurve(AsusFan.GPU, AppConfig.GetDefaultCurve(AsusFan.GPU));
+
+                if (AppConfig.Is("mid_fan"))
+                    Program.acpi.SetFanCurve(AsusFan.Mid, AppConfig.GetDefaultCurve(AsusFan.Mid));
+
+                if (cpuResult == 1 || gpuResult == 1)
+                    customFans = true;
+            }
+            else
             {
                 XGM.Reset();
+                Program.acpi.RestoreFansToAuto();
             }
 
             SetModeLabel();
@@ -342,10 +359,18 @@ namespace GHelper.Mode
             bool allAMD = Program.acpi.IsAllAmdPPT();
             bool isAMD = CpuInfo.IsAMD;
 
-            int limit_total = AppConfig.GetMode("limit_total");
-            int limit_cpu = AppConfig.GetMode("limit_cpu");
-            int limit_slow = AppConfig.GetMode("limit_slow");
-            int limit_fast = AppConfig.GetMode("limit_fast");
+            int mode = Modes.GetCurrentBase();
+            int defaultLimit = mode switch
+            {
+                AsusACPI.PerformanceSilent => Program.acpi.IsOmen() ? 65 : 20,
+                AsusACPI.PerformanceTurbo => Program.acpi.IsOmen() ? 130 : 80,
+                _ => Program.acpi.IsOmen() ? 90 : 40
+            };
+
+            int limit_total = AppConfig.GetMode("limit_total", defaultLimit);
+            int limit_cpu = AppConfig.GetMode("limit_cpu", limit_total);
+            int limit_slow = AppConfig.GetMode("limit_slow", limit_total);
+            int limit_fast = AppConfig.GetMode("limit_fast", limit_slow);
 
             if (limit_slow < 0 || allAMD) limit_slow = limit_total;
 
@@ -436,12 +461,20 @@ namespace GHelper.Mode
             int gpu_temp = AppConfig.GetMode("gpu_temp");
             int gpu_power = AppConfig.GetMode("gpu_power");
 
+            // If user hasn't saved a custom GPU power limit, use defaults (Silent: 30W, Balanced: 60W, Turbo: Max)
+            if (gpu_power < 0) 
+            {
+                int maxGpuPower = Fans.IsSmiPowerLimit ? NvidiaSmi.GetMaxGPUPower() : AsusACPI.MaxGPUPower;
+                if (maxGpuPower <= 0) maxGpuPower = AsusACPI.MaxGPUPower;
+                gpu_power = AppConfig.GetDefaultGpuPowerLimit(maxGpuPower);
+            }
+
             int boostResult = -1;
 
             if (gpu_power >= AsusACPI.MinGPUPower && gpu_power <= AsusACPI.MaxGPUPower && Program.acpi.IsSupported(AsusACPI.GPU_POWER))
                 Program.acpi.DeviceSet(AsusACPI.GPU_POWER, gpu_power, "PowerLimit TGP (GPU VAR)");
                 
-            if (Fans.IsSmiPowerLimit)
+            if (Fans.IsSmiPowerLimit && gpu_power >= AsusACPI.MinGPUPower && gpu_power <= AsusACPI.MaxGPUPower)
                 NvidiaSmi.SetPowerLimit(gpu_power);
 
             if (gpu_boost >= AsusACPI.MinGPUBoost && gpu_boost <= AsusACPI.MaxGPUBoost && Program.acpi.IsSupported(AsusACPI.PPT_GPUC0))
@@ -516,22 +549,29 @@ namespace GHelper.Mode
             var lines = new System.Text.StringBuilder();
             try
             {
-                int cpuUV   = AppConfig.GetMode("cpu_uv",   0);
-                int igpuUV  = AppConfig.GetMode("igpu_uv",  0);
+                int cpuUV   = AppConfig.GetMode("cpu_uv",   0); // Max Curve Optimizer
+                int igpuUV  = AppConfig.GetMode("igpu_uv",  45); // Max Power Limit (W)
                 int cpuTemp = AppConfig.GetMode("cpu_temp");
+
+                int currentMode = AppConfig.Get("performance_mode");
+                int limitTotal = AppConfig.GetMode("limit_total");
+                int? customLimit = limitTotal > 0 ? limitTotal : null;
+                int? customTemp = cpuTemp > 0 ? cpuTemp : null;
+
+                bool powerSuccess = OmenCore.Hardware.UxtuBackend.ApplyPreset(currentMode, customLimit, customTemp);
+                if (powerSuccess) {
+                    lines.AppendLine($"Applied UXTU Preset (Mode {currentMode})");
+                }
 
                 var provider = CpuUndervoltProviderFactory.Create(out string backend);
 
-                if ((CpuInfo.IsSupportedUV() && cpuUV >= CpuInfo.MinCPUUV && cpuUV <= CpuInfo.MaxCPUUV) ||
-                    (CpuInfo.IsSupportedUViGPU() && igpuUV >= CpuInfo.MinIGPUUV && igpuUV <= CpuInfo.MaxIGPUUV))
-                {
-                    var offset = new UndervoltOffset { CoreMv = CpuInfo.IsAMD ? cpuUV * 4 : cpuUV, CacheMv = CpuInfo.IsAMD ? igpuUV * 4 : igpuUV };
-                    provider.ApplyOffsetAsync(offset, CancellationToken.None).Wait();
-                    _cpuUV = cpuUV;
-                    _igpuUV = igpuUV;
-                    Logger.WriteLine($"Applied UV: CPU {cpuUV}, iGPU {igpuUV} ({backend})");
-                    lines.AppendLine($"UV applied via {backend}");
-                }
+                var offset = new UndervoltOffset { CoreMv = cpuUV * 4, CacheMv = 0 };
+                provider.ApplyOffsetAsync(offset, CancellationToken.None).Wait();
+                _cpuUV = cpuUV;
+                _igpuUV = igpuUV;
+                Logger.WriteLine($"Applied Curve Optimizer: {cpuUV}, Power Limit: {igpuUV}W ({backend})");
+                lines.AppendLine($"Curve Optimizer applied via {backend}");
+
 
                 SmuStatus? tempStatus = SetCPUTemp(cpuTemp, true);
                 if (tempStatus.HasValue) lines.AppendLine($"CPU Temp {cpuTemp}°C: {tempStatus}");
@@ -581,7 +621,8 @@ namespace GHelper.Mode
         {
             if (!CpuInfo.IsAMD) return;
 
-            if (AppConfig.IsApplyUV()) SetRyzen();
+            // On AMD, the UV and Temp sliders are moved to the Power panel, so we check IsApplyPower as well
+            if (AppConfig.IsApplyUV() || AppConfig.IsApplyPower()) SetRyzen();
             else ResetRyzen();
         }
 

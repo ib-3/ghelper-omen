@@ -1,4 +1,4 @@
-﻿using GHelper.Peripherals;
+using GHelper.Peripherals;
 using GHelper.Peripherals.Mouse;
 using GHelper.UI;
 
@@ -270,16 +270,12 @@ namespace GHelper
 
         private void ButtonDPIColor_Click(object? sender, EventArgs e)
         {
-            ColorDialog colorDlg = new ColorDialog
-            {
-                AllowFullOpen = true,
-                Color = pictureDPIColor.BackColor
-            };
+            using GHelper.UI.ColorPickerForm colorDlg = new GHelper.UI.ColorPickerForm(pictureDPIColor.BackColor);
 
-            if (colorDlg.ShowDialog() == DialogResult.OK)
+            if (colorDlg.ShowDialog(this) == DialogResult.OK)
             {
                 AsusMouseDPI dpi = mouse.DpiSettings[mouse.DpiProfile - 1];
-                dpi.Color = colorDlg.Color;
+                dpi.Color = colorDlg.SelectedColor;
 
                 mouse.SetDPIForProfile(dpi, mouse.DpiProfile);
 
@@ -464,16 +460,12 @@ namespace GHelper
 
         private void ButtonLightingColor_Click(object? sender, EventArgs e)
         {
-            ColorDialog colorDlg = new ColorDialog
-            {
-                AllowFullOpen = true,
-                Color = pictureBoxLightingColor.BackColor
-            };
+            using GHelper.UI.ColorPickerForm colorDlg = new GHelper.UI.ColorPickerForm(pictureBoxLightingColor.BackColor);
 
-            if (colorDlg.ShowDialog() == DialogResult.OK)
+            if (colorDlg.ShowDialog(this) == DialogResult.OK)
             {
                 LightingSetting? ls = mouse.LightingSettingForZone(visibleZone);
-                ls.RGBColor = colorDlg.Color;
+                ls.RGBColor = colorDlg.SelectedColor;
 
                 UpdateLightingSettings(ls, visibleZone);
             }

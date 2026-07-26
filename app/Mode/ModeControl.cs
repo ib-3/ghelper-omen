@@ -527,7 +527,12 @@ namespace GHelper.Mode
                 var smu = GetSmu();
                 if (smu == null)
                 {
-                    Logger.WriteLine("UV Error: Ryzen SMU unavailable (PawnIO not initialized or not admin).");
+                    if (_lastUvOk)
+                    {
+                        Logger.WriteLine("UV Error: Ryzen SMU unavailable (PawnIO not initialized or not admin).");
+                        _lastUvOk = false;
+                        _lastUvValue = 0;
+                    }
                     return;
                 }
                 var status = smu.SetCoAll(cpuUV);
@@ -564,7 +569,12 @@ namespace GHelper.Mode
                 var smu = GetSmu();
                 if (smu == null)
                 {
-                    Logger.WriteLine("iGPU UV Error: Ryzen SMU unavailable (PawnIO not initialized or not admin).");
+                    if (_lastIgpuUvOk)
+                    {
+                        Logger.WriteLine("iGPU UV Error: Ryzen SMU unavailable (PawnIO not initialized or not admin).");
+                        _lastIgpuUvOk = false;
+                        _lastIgpuUvValue = 0;
+                    }
                     return;
                 }
                 var status = smu.SetCoGfx(igpuUV);
@@ -654,6 +664,10 @@ namespace GHelper.Mode
             if (_cpuUV != 0) SetUV(0);
             if (_igpuUV != 0) SetUViGPU(0);
             if (_cpuTemp != CpuInfo.DefaultTemp) SetCPUTemp(CpuInfo.DefaultTemp, true);
+            // Reset transition trackers so re-enable always logs the first write,
+            // even if the previous session ended in a failure state.
+            _lastUvOk = true;  _lastUvValue = 0;
+            _lastIgpuUvOk = true;  _lastIgpuUvValue = 0;
             SetReapplyEnabled(false);
         }
 

@@ -199,6 +199,14 @@ namespace OmenCore.Hardware
         /// Auto-detected during initialization.
         /// </summary>
         public int MaxFanLevel { get; private set; } = 55;
+        
+        public void UpdateMaxFanLevel(int newMax)
+        {
+            if (newMax > 0 && newMax <= 100)
+            {
+                MaxFanLevel = newMax;
+            }
+        }
         public bool HeartbeatEnabled => _heartbeatEnabled;
         
         // Heartbeat health properties (v2.7.0)
@@ -1371,7 +1379,7 @@ namespace OmenCore.Hardware
                 // OmenMon structs pack to exactly 37 bytes: 1 byte (zone count) + 24 bytes (padding) + 12 bytes (4 zones)
                 var data = new byte[37];
                 
-                // Byte 0: Zone count (max index: 3 for 4 zones, matching OmenMon)
+                // Byte 0: Zone count (must be 3 for 4 zones on Omen, even for 1-zone keyboards)
                 data[0] = 3;
                 
                 // Bytes 1-24: Padding (leave as zeros)
@@ -1381,6 +1389,17 @@ namespace OmenCore.Hardware
                 int colorOffset = 1 + COLOR_TABLE_PAD; // Byte 25
                 int colorsToCopy = Math.Min(zoneColors.Length, 12);
                 Array.Copy(zoneColors, 0, data, colorOffset, colorsToCopy);
+
+                // If only 1 zone was provided (3 bytes), duplicate it to the other 3 zones
+                // to ensure the single-zone keyboard receives the color regardless of which
+                // physical WMI zone it is wired to.
+                if (zoneColors.Length == 3)
+                {
+                    Array.Copy(zoneColors, 0, data, colorOffset + 3, 3);
+                    Array.Copy(zoneColors, 0, data, colorOffset + 6, 3);
+                    Array.Copy(zoneColors, 0, data, colorOffset + 9, 3);
+                }
+                
                 
                 _logging?.Info($"SetColorTable: ZoneCount={data[0]}, copied {colorsToCopy} bytes at offset {colorOffset}");
 

@@ -35,7 +35,8 @@ namespace OmenCore.Hardware
         
         // Fan level constants - HP WMI uses 0-55 krpm range (0-5500 RPM) on classic models,
         // or 0-100 percentage on newer models. Auto-detected from WMI at startup.
-        private readonly int _maxFanLevel;
+        private int _maxFanLevel;
+        private readonly bool _maxFanLevelOverriddenByUser;
         
         // Maximum ceiling for "Max" mode operations. When the user requests maximum cooling,
         // we previously sent 100 and let the BIOS clamp to its hardware maximum.
@@ -70,8 +71,8 @@ namespace OmenCore.Hardware
         private const int MaxModeTelemetryUnavailableReassertCycles = 3;
         private const int ManualModeReapplyIntervalMs = 2500;
         private const int PresetModeReapplyIntervalMs = 30000;
-        private const int MaxModeHealthyRpmFloor = 2000;
-        private const double MaxModeHealthyLevelRatio = 0.40;
+        private int MaxModeHealthyRpmFloor => (int)Math.Round(_maxFanLevel * MaxModeHealthyLevelRatio * 100.0);
+        private const double MaxModeHealthyLevelRatio = 0.97;
         
         // RPM debounce tracking — filters transient phantom readings during profile transitions.
         // When fans are transitioning (e.g., profile switch), BIOS may return stale/target fan levels
@@ -134,6 +135,8 @@ namespace OmenCore.Hardware
             _hwMonitor = hwMonitor;
             _logging = logging;
             _wmiBios = injectedWmiBios ?? new HpWmiBios(logging);
+            
+            _maxFanLevelOverriddenByUser = maxFanLevelOverride > 0;
             
             // Apply user override if set, then read the (possibly overridden) max level.
             // Pass isDesktop so DetectMaxFanLevel can pick the right hardware range:
@@ -702,13 +705,10 @@ namespace OmenCore.Hardware
             cpuPercent = Math.Clamp(cpuPercent, 0, 100);
             gpuPercent = Math.Clamp(gpuPercent, 0, 100);
 
-            // Enforce minimum stable PWM for V2 laptops
-            // V2 systems can become unstable (fans pulsing on/off) at very low non-zero percentages
-            if (_maxFanLevel == 100)
-            {
-                if (cpuPercent > 0 && cpuPercent < 20) cpuPercent = 20;
-                if (gpuPercent > 0 && gpuPercent < 20) gpuPercent = 20;
-            }
+            // Enforce minimum stable PWM
+            // Systems can become unstable (fans pulsing on/off) at very low non-zero percentages
+            if (cpuPercent > 0 && cpuPercent < 20) cpuPercent = 20;
+            if (gpuPercent > 0 && gpuPercent < 20) gpuPercent = 20;
 
             if (IsManualControlActive && _lastManualCpuPercent == cpuPercent && _lastManualGpuPercent == gpuPercent)
             {
@@ -1171,6 +1171,26 @@ namespace OmenCore.Hardware
             }
         }
 
+        private void TryUpdateMaxFanLevel(double observedRpm)
+        {
+            if (_maxFanLevelOverriddenByUser || _maxFanLevel >= 100) return;
+            
+            // Convert RPM to expected V1 krpm level
+            int observedLevel = (int)Math.Round(observedRpm / 100.0);
+            
+            // Require a significant jump (at least 3 levels / 300 RPM) over current max
+            // Cap the max dynamic level at 80 (8000 RPM) for safety
+            if (observedLevel >= _maxFanLevel + 3 && observedLevel <= 80)
+            {
+                _logging?.Info($"Dynamically increasing MaxFanLevel from {_maxFanLevel} to {observedLevel} based on observed RPM {observedRpm}");
+                _maxFanLevel = observedLevel;
+                if (_wmiBios is HpWmiBios concrete)
+                {
+                    concrete.UpdateMaxFanLevel(observedLevel);
+                }
+            }
+        }
+
         /// <summary>
         /// Read current fan telemetry data.
         /// v2.6.0: Uses GetFanRpmDirect() for V2 systems with proper sanity validation.
@@ -1189,6 +1209,11 @@ namespace OmenCore.Hardware
                 // v2.8.1: Add profile transition debounce — during profile switches,
                 // BIOS may return stale/target fan levels that aren't actual RPM.
                 int validatedRpm = (rpm > 0 && rpm <= 8000) ? (int)rpm : 0;
+                
+                if (validatedRpm > 0)
+                {
+                    TryUpdateMaxFanLevel(validatedRpm);
+                }
                 
                 // Debounce: during profile transition window, filter sudden large jumps
                 bool inTransition = (DateTime.Now - _lastProfileSwitch).TotalMilliseconds < ProfileTransitionDebounceMs;

@@ -68,15 +68,24 @@ namespace GHelper.Mode
 
         private void ReapplyTimer_Elapsed(object? sender, System.Timers.ElapsedEventArgs e)
         {
-            // Periodically re-apply power limits and undervolt to prevent OEM firmware from resetting them
-            // [OMEN PORT]: Disabled SetPower() polling. HP firmware generally doesn't reset MSRs every few seconds, 
+            // Periodically re-apply power limits and undervolt to prevent OEM firmware from resetting them.
+            // [OMEN PORT]: Disabled SetPower() polling. HP firmware generally doesn't reset MSRs every few seconds,
             // and constant polling locks up WMI/PawnIO leading to log spam and fan control failure.
             // if (AppConfig.IsApplyPower()) SetPower();
-            
+
             if (AppConfig.IsApplyUV())
             {
+                // Re-apply Curve Optimizer offsets — AMD SMU resets CO on sleep/resume
+                // and on HP EC thermal-policy switches. The patched SetRyzen() cleanly
+                // separates CO (SetUV) from power limits (SetRyzenPower), so we must
+                // explicitly re-apply both here.
+                int cpuUV  = AppConfig.GetMode("cpu_uv", 0);
+                int igpuUV = AppConfig.GetMode("igpu_uv", 0);
+                if (cpuUV != 0) SetUV(cpuUV);
+                if (igpuUV != 0) SetUViGPU(igpuUV);
+
                 SetCPUTemp(AppConfig.GetMode("cpu_temp"));
-                SetRyzenPower(); // Note: SetRyzenPower handles undervolt
+                SetRyzenPower();
             }
         }
 

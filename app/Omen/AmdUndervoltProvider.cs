@@ -290,7 +290,8 @@ namespace OmenCore.Hardware
         /// </summary>
         public RyzenSmu.SmuStatus SetStapmLimit(uint valueMw)
         {
-            valueMw = Math.Clamp(valueMw, 15_000u, 54_000u);
+            // Allow up to 250W for HX-series (7945HX, 8945HX, AI 9 HX 370, etc.)
+            valueMw = Math.Clamp(valueMw, 15_000u, 250_000u);
 
             uint[] args = new uint[6];
             args[0] = valueMw;
@@ -298,9 +299,18 @@ namespace OmenCore.Hardware
 
             switch (_cpuInfo.Family)
             {
+                case RyzenFamily.Zen1Plus:
+                    result = _smu.SendPsmu(0x64, ref args);
+                    break;
+
                 case RyzenFamily.Raven:
                 case RyzenFamily.Picasso:
                 case RyzenFamily.Dali:
+                    result = _smu.SendMp1(0x1A, ref args);
+                    break;
+
+                case RyzenFamily.Matisse:
+                case RyzenFamily.Vermeer:
                     result = _smu.SendMp1(0x1A, ref args);
                     break;
 
@@ -312,9 +322,15 @@ namespace OmenCore.Hardware
                 case RyzenFamily.Mendocino:
                 case RyzenFamily.HawkPoint:
                 case RyzenFamily.StrixPoint:
+                case RyzenFamily.StrixHalo:
                     result = _smu.SendMp1(0x14, ref args);
                     if (result == RyzenSmu.SmuStatus.Ok)
                         result = _smu.SendPsmu(0x31, ref args);
+                    break;
+
+                case RyzenFamily.RaphaelDragonRange:
+                case RyzenFamily.FireRange:
+                    result = _smu.SendMp1(0x3E, ref args);
                     break;
             }
 
@@ -326,7 +342,7 @@ namespace OmenCore.Hardware
         /// </summary>
         public RyzenSmu.SmuStatus SetFastPptLimit(uint valueMw)
         {
-            valueMw = Math.Clamp(valueMw, 15_000u, 54_000u);
+            valueMw = Math.Clamp(valueMw, 15_000u, 250_000u);
 
             uint[] args = new uint[6];
             args[0] = valueMw;
@@ -340,6 +356,11 @@ namespace OmenCore.Hardware
                     result = _smu.SendMp1(0x1B, ref args);
                     break;
 
+                case RyzenFamily.Matisse:
+                case RyzenFamily.Vermeer:
+                    result = _smu.SendMp1(0x1B, ref args);
+                    break;
+
                 case RyzenFamily.RenoirLucienne:
                 case RyzenFamily.VanGogh:
                 case RyzenFamily.CezanneBarcelo:
@@ -348,7 +369,13 @@ namespace OmenCore.Hardware
                 case RyzenFamily.Mendocino:
                 case RyzenFamily.HawkPoint:
                 case RyzenFamily.StrixPoint:
+                case RyzenFamily.StrixHalo:
                     result = _smu.SendMp1(0x15, ref args);
+                    break;
+
+                case RyzenFamily.RaphaelDragonRange:
+                case RyzenFamily.FireRange:
+                    result = _smu.SendMp1(0x5F, ref args);
                     break;
             }
 
@@ -360,7 +387,7 @@ namespace OmenCore.Hardware
         /// </summary>
         public RyzenSmu.SmuStatus SetSlowPptLimit(uint valueMw)
         {
-            valueMw = Math.Clamp(valueMw, 15_000u, 54_000u);
+            valueMw = Math.Clamp(valueMw, 15_000u, 250_000u);
 
             uint[] args = new uint[6];
             args[0] = valueMw;
@@ -374,6 +401,11 @@ namespace OmenCore.Hardware
                     result = _smu.SendMp1(0x1C, ref args);
                     break;
 
+                case RyzenFamily.Matisse:
+                case RyzenFamily.Vermeer:
+                    result = _smu.SendMp1(0x1C, ref args);
+                    break;
+
                 case RyzenFamily.RenoirLucienne:
                 case RyzenFamily.VanGogh:
                 case RyzenFamily.CezanneBarcelo:
@@ -382,7 +414,13 @@ namespace OmenCore.Hardware
                 case RyzenFamily.Mendocino:
                 case RyzenFamily.HawkPoint:
                 case RyzenFamily.StrixPoint:
+                case RyzenFamily.StrixHalo:
                     result = _smu.SendMp1(0x16, ref args);
+                    break;
+
+                case RyzenFamily.RaphaelDragonRange:
+                case RyzenFamily.FireRange:
+                    result = _smu.SendMp1(0x4F, ref args);
                     break;
             }
 

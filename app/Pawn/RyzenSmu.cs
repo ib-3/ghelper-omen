@@ -159,6 +159,10 @@ namespace PawnIO
 
         public SmuStatus SetCoAll(int value)
         {
+            // AMD Curve Optimizer firmware cap is ±30 counts.
+            // The slider (CpuInfo.MinCPUUV = -40) can exceed this — clamp here
+            // so the SMU never sees an out-of-range value.
+            value = Math.Clamp(value, -30, 30);
             uint v = EncodeCurve(value);
             return Family switch
             {
@@ -176,6 +180,7 @@ namespace PawnIO
 
         public SmuStatus SetCoGfx(int value)
         {
+            value = Math.Clamp(value, -30, 30);
             uint v = EncodeCurve(value);
             return Family switch
             {
@@ -359,7 +364,14 @@ namespace PawnIO
             _                            => CpuFamily.Unknown,
         };
 
-        private static uint EncodeCurve(int steps) => (uint)(0x100000 - (uint)(-steps));
+        // Canonical CO encoding matching RyzenAdj/UXTU:
+        //   0      → 0x00000  (no offset — neutral)
+        //   -N     → 0x100000 + (-N)  i.e. 0xFFFF6 for -10  (20-bit two's complement)
+        //   +N     → N
+        // The old formula `0x100000 - (uint)(-steps)` produced 0x100000 for steps==0
+        // ("negative zero"), which some SMU firmware (StrixHalo) rejects.
+        private static uint EncodeCurve(int steps) =>
+            steps < 0 ? (uint)(0x100000 + steps) : (uint)steps;
 
         private SmuStatus SetStapm(int watts)
         {

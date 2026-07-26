@@ -1049,6 +1049,7 @@ namespace GHelper
             AppConfig.SetMode("auto_apply", chk.Checked ? 1 : 0);
             labelFans.Text = chk.Checked ? "Custom Fan Curves" : "Default Fan Curves";
             modeControl.SetPerformanceMode();
+            Program.settingsForm.RefreshTimerState();
 
         }
 
@@ -1455,6 +1456,7 @@ namespace GHelper
 
             AppConfig.SetMode("auto_apply", 0);
             AppConfig.SetMode("auto_apply_power", 0); // off by default
+            Program.settingsForm.RefreshTimerState();
 
             // Explicitly remove power limits so they reset to defaults
             AppConfig.RemoveMode("limit_total");

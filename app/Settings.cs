@@ -246,7 +246,8 @@ namespace GHelper
 
             sensorTimer = new System.Timers.Timer(AppConfig.Get("sensor_timer", 1000));
             sensorTimer.Elapsed += OnTimedEvent;
-            sensorTimer.Enabled = sensorsAlways;
+            bool omenFansActive = Program.acpi?.IsOmen() == true && AppConfig.IsApplyFans();
+            sensorTimer.Enabled = sensorsAlways || omenFansActive;
 
             labelCharge.MouseEnter += PanelBattery_MouseEnter;
             labelCharge.MouseLeave += PanelBattery_MouseLeave;
@@ -689,9 +690,15 @@ namespace GHelper
             }
         }
 
+        public void RefreshTimerState()
+        {
+            bool omenFansActive = Program.acpi?.IsOmen() == true && AppConfig.IsApplyFans();
+            sensorTimer.Enabled = this.Visible || sensorsAlways || omenFansActive;
+        }
+
         private void SettingsForm_VisibleChanged(object? sender, EventArgs e)
         {
-            sensorTimer.Enabled = this.Visible || sensorsAlways;
+            RefreshTimerState();
             if (this.Visible)
             {
                 ScreenControl.InitScreen();
@@ -1657,7 +1664,8 @@ namespace GHelper
 
         public async void RefreshSensors(bool force = false)
         {
-            int throttle = (!Visible && sensorsAlways) ? 6000 : 2000;
+            bool omenFansActive = Program.acpi?.IsOmen() == true && AppConfig.IsApplyFans();
+            int throttle = (!Visible && sensorsAlways && !omenFansActive) ? 6000 : 2000;
             if (!force && Math.Abs(DateTimeOffset.Now.ToUnixTimeMilliseconds() - lastRefresh) < throttle) return;
             lastRefresh = DateTimeOffset.Now.ToUnixTimeMilliseconds();
 

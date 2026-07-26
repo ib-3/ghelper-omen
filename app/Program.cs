@@ -125,6 +125,7 @@ namespace GHelper
             Logger.WriteLine("Start Count: " + startCount);
 
             acpi = new AsusACPI();
+            settingsForm.RefreshTimerState();
 
             if (!acpi.IsConnected() && AppConfig.IsASUS())
             {

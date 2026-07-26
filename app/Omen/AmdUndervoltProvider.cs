@@ -330,7 +330,7 @@ namespace OmenCore.Hardware
 
                 case RyzenFamily.RaphaelDragonRange:
                 case RyzenFamily.FireRange:
-                    result = _smu.SendMp1(0x3E, ref args);
+                    result = _smu.SendMp1(0x4F, ref args);  // STAPM — matches RyzenSmu.SetStapm
                     break;
             }
 
@@ -375,7 +375,7 @@ namespace OmenCore.Hardware
 
                 case RyzenFamily.RaphaelDragonRange:
                 case RyzenFamily.FireRange:
-                    result = _smu.SendMp1(0x5F, ref args);
+                    result = _smu.SendMp1(0x3E, ref args);  // fPPT — matches RyzenSmu.SetFast
                     break;
             }
 
@@ -420,7 +420,7 @@ namespace OmenCore.Hardware
 
                 case RyzenFamily.RaphaelDragonRange:
                 case RyzenFamily.FireRange:
-                    result = _smu.SendMp1(0x4F, ref args);
+                    result = _smu.SendMp1(0x5F, ref args);  // sPPT — matches RyzenSmu.SetSlow
                     break;
             }
 

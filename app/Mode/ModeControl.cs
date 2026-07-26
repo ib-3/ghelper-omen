@@ -21,6 +21,12 @@ namespace GHelper.Mode
         private int _cpuTemp = CpuInfo.DefaultTemp;
         private bool _ryzenPower = false;
 
+        // Transition-only logging for SetUV/SetUViGPU — avoids ~40 lines/min from reapply timer
+        private bool _lastUvOk = true;
+        private int  _lastUvValue = 0;
+        private bool _lastIgpuUvOk = true;
+        private int  _lastIgpuUvValue = 0;
+
         private static RyzenSmuService? _smu;
         private static readonly object _smuLock = new();
 
@@ -526,7 +532,13 @@ namespace GHelper.Mode
                 }
                 var status = smu.SetCoAll(cpuUV);
                 _cpuUV = cpuUV;
-                Logger.WriteLine($"UV: {cpuUV} (Ryzen SMU, {smu.Family}) - {status}");
+                bool ok = status == SmuStatus.OK;
+                if (ok != _lastUvOk || cpuUV != _lastUvValue)
+                {
+                    Logger.WriteLine($"UV: {cpuUV} (Ryzen SMU, {smu.Family}) - {status}");
+                    _lastUvOk = ok;
+                    _lastUvValue = cpuUV;
+                }
             }
             else
             {
@@ -557,7 +569,13 @@ namespace GHelper.Mode
                 }
                 var status = smu.SetCoGfx(igpuUV);
                 _igpuUV = igpuUV;
-                Logger.WriteLine($"iGPU UV: {igpuUV} (Ryzen SMU, {smu.Family}) - {status}");
+                bool ok = status == SmuStatus.OK;
+                if (ok != _lastIgpuUvOk || igpuUV != _lastIgpuUvValue)
+                {
+                    Logger.WriteLine($"iGPU UV: {igpuUV} (Ryzen SMU, {smu.Family}) - {status}");
+                    _lastIgpuUvOk = ok;
+                    _lastIgpuUvValue = igpuUV;
+                }
             }
             else
             {

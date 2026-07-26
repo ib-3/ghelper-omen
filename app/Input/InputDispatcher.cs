@@ -49,7 +49,7 @@ namespace GHelper.Input
             Debug.WriteLine($"Init: {BitConverter.ToString(result)}");
 
             Program.acpi.SubscribeToEvents(WatcherEventArrived);
-            Program.acpi.SubscribeToOmenEvents();
+            Task.Run(() => Program.acpi.SubscribeToOmenEvents());
 
             //Task.Run(Program.acpi.RunListener);
 

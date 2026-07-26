@@ -228,6 +228,10 @@ namespace OmenCore.Hardware
                 if (CpuModel.Contains("Model 17")) return RyzenFamily.Raven;
                 if (CpuModel.Contains("Model 24")) return RyzenFamily.Picasso;
                 if (CpuModel.Contains("Model 32")) return RyzenFamily.Dali;
+                // Matisse (Ryzen 3000 desktop) is Family 23h / Model 113 (0x71).
+                // Was previously unreachable here, causing ConfigureSmuAddresses()
+                // to zero every mailbox address for these CPUs (GitHub issue: dead Matisse tuning).
+                if (CpuModel.Contains("Model 113")) return RyzenFamily.Matisse;
             }
 
             // Renoir/Lucienne detection

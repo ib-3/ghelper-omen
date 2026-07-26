@@ -40,17 +40,34 @@ namespace PawnIO
         public static bool IsSupportedUV()
         {
             if (!IsAMD) return true; // Intel CPUs (mostly HX/HK on Omen) use MSR, let the backend handle validation
-            
-            return Name.Contains("RYZEN AI MAX", StringComparison.OrdinalIgnoreCase) ||
-                   Name.Contains("Ryzen AI 9", StringComparison.OrdinalIgnoreCase)   ||
-                   Name.Contains("Ryzen 9", StringComparison.OrdinalIgnoreCase)      ||
-                   Name.Contains("Ryzen 7", StringComparison.OrdinalIgnoreCase)      || // Allow Ryzen 7
-                   Name.Contains("4900H", StringComparison.OrdinalIgnoreCase)        ||
-                   Name.Contains("4800H", StringComparison.OrdinalIgnoreCase)        ||
-                   Name.Contains("4600H", StringComparison.OrdinalIgnoreCase);
+
+            // Single source of truth: matches RyzenSmuService.SetCoAll's actual switch coverage,
+            // not a separately-maintained WMI name list (that duplicate list previously let
+            // 6800H/7945H/7845H/etc. pass RyzenControl.SupportsUndervolt() but silently fail here).
+            var smu = GHelper.Mode.ModeControl.GetSmu();
+            if (smu == null) return false;
+
+            return smu.Family is CpuFamily.Renoir
+                                or CpuFamily.Mobile
+                                or CpuFamily.StrixPoint
+                                or CpuFamily.StrixHalo
+                                or CpuFamily.Raphael;
         }
 
-        public static bool IsSupportedUViGPU() => true; // Let backend handle if iGPU UV is supported
+        public static bool IsSupportedUViGPU()
+        {
+            if (!IsAMD) return true;
+
+            // Matches RyzenSmuService.SetCoGfx's actual switch coverage.
+            // Note StrixPoint is deliberately excluded here (unlike IsSupportedUV) —
+            // there is no set-cogfx command for StrixPoint in RyzenAdj or UXTU.
+            var smu = GHelper.Mode.ModeControl.GetSmu();
+            if (smu == null) return false;
+
+            return smu.Family is CpuFamily.Renoir
+                                or CpuFamily.Mobile
+                                or CpuFamily.StrixHalo;
+        }
 
         private static (string Name, string Caption) Load()
         {

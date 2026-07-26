@@ -572,8 +572,11 @@ internal sealed class OmenBackend : IDisposable
                     }
                     Logger.WriteLine($"OmenPowerLimit: AMD SMU write OK — {watts}W");
                 }
-                
-                if (success) return true;
+
+                // Always return here on AMD: the MSR path below is Intel-only (MSR 0x610)
+                // and falling through on SMU failure previously masked the real error by
+                // silently attempting Intel-specific code on an AMD CPU.
+                return success;
             }
         }
 

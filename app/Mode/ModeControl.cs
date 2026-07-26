@@ -24,7 +24,7 @@ namespace GHelper.Mode
         private static RyzenSmuService? _smu;
         private static readonly object _smuLock = new();
 
-        private static RyzenSmuService? GetSmu()
+        internal static RyzenSmuService? GetSmu()
         {
             lock (_smuLock)
             {
@@ -505,11 +505,24 @@ namespace GHelper.Mode
         public void SetUV(int cpuUV)
         {
             if (!CpuInfo.IsSupportedUV()) return;
+            if (cpuUV < CpuInfo.MinCPUUV || cpuUV > CpuInfo.MaxCPUUV) return;
 
-            if (cpuUV >= CpuInfo.MinCPUUV && cpuUV <= CpuInfo.MaxCPUUV)
+            if (CpuInfo.IsAMD)
+            {
+                var smu = GetSmu();
+                if (smu == null)
+                {
+                    Logger.WriteLine("UV Error: Ryzen SMU unavailable (PawnIO not initialized or not admin).");
+                    return;
+                }
+                var status = smu.SetCoAll(cpuUV);
+                _cpuUV = cpuUV;
+                Logger.WriteLine($"UV: {cpuUV} (Ryzen SMU, {smu.Family}) - {status}");
+            }
+            else
             {
                 var provider = CpuUndervoltProviderFactory.Create(out string backend);
-                var offset = new UndervoltOffset { CoreMv = CpuInfo.IsAMD ? cpuUV * 4 : cpuUV, CacheMv = _igpuUV * (CpuInfo.IsAMD ? 4 : 1) };
+                var offset = new UndervoltOffset { CoreMv = cpuUV, CacheMv = _igpuUV };
                 try {
                     provider.ApplyOffsetAsync(offset, CancellationToken.None).Wait();
                     _cpuUV = cpuUV;
@@ -523,11 +536,24 @@ namespace GHelper.Mode
         public void SetUViGPU(int igpuUV)
         {
             if (!CpuInfo.IsSupportedUViGPU()) return;
+            if (igpuUV < CpuInfo.MinIGPUUV || igpuUV > CpuInfo.MaxIGPUUV) return;
 
-            if (igpuUV >= CpuInfo.MinIGPUUV && igpuUV <= CpuInfo.MaxIGPUUV)
+            if (CpuInfo.IsAMD)
+            {
+                var smu = GetSmu();
+                if (smu == null)
+                {
+                    Logger.WriteLine("iGPU UV Error: Ryzen SMU unavailable (PawnIO not initialized or not admin).");
+                    return;
+                }
+                var status = smu.SetCoGfx(igpuUV);
+                _igpuUV = igpuUV;
+                Logger.WriteLine($"iGPU UV: {igpuUV} (Ryzen SMU, {smu.Family}) - {status}");
+            }
+            else
             {
                 var provider = CpuUndervoltProviderFactory.Create(out string backend);
-                var offset = new UndervoltOffset { CoreMv = _cpuUV * (CpuInfo.IsAMD ? 4 : 1), CacheMv = CpuInfo.IsAMD ? igpuUV * 4 : igpuUV };
+                var offset = new UndervoltOffset { CoreMv = _cpuUV, CacheMv = igpuUV };
                 try {
                     provider.ApplyOffsetAsync(offset, CancellationToken.None).Wait();
                     _igpuUV = igpuUV;
@@ -549,29 +575,16 @@ namespace GHelper.Mode
             var lines = new System.Text.StringBuilder();
             try
             {
-                int cpuUV   = AppConfig.GetMode("cpu_uv",   0); // Max Curve Optimizer
-                int igpuUV  = AppConfig.GetMode("igpu_uv",  45); // Max Power Limit (W)
-                int cpuTemp = AppConfig.GetMode("cpu_temp");
+                // NOTE: Power Limit (limit_total) is intentionally NOT touched here.
+                // It's already fully owned by SetPower() -> SetRyzenPower() -> SetAdaptiveLimits(),
+                // which applies STAPM+FAST+SLOW+PPT+TDC+EDC via the ioctl-detected RyzenSmuService.
+                // The old code duplicated (and mismatched) that here via the external UxtuBackend
+                // CLI shell-out, which required an unbundled ryzenadj.exe/uxtu-cli.exe to even run.
+                int cpuUV   = AppConfig.GetMode("cpu_uv", 0); // Max Curve Optimizer (sign already flipped by Fans.cs)
+                int cpuTemp = AppConfig.GetMode("cpu_temp", CpuInfo.DefaultTemp);
 
-                int currentMode = AppConfig.Get("performance_mode");
-                int limitTotal = AppConfig.GetMode("limit_total");
-                int? customLimit = limitTotal > 0 ? limitTotal : null;
-                int? customTemp = cpuTemp > 0 ? cpuTemp : null;
-
-                bool powerSuccess = OmenCore.Hardware.UxtuBackend.ApplyPreset(currentMode, customLimit, customTemp);
-                if (powerSuccess) {
-                    lines.AppendLine($"Applied UXTU Preset (Mode {currentMode})");
-                }
-
-                var provider = CpuUndervoltProviderFactory.Create(out string backend);
-
-                var offset = new UndervoltOffset { CoreMv = cpuUV * 4, CacheMv = 0 };
-                provider.ApplyOffsetAsync(offset, CancellationToken.None).Wait();
-                _cpuUV = cpuUV;
-                _igpuUV = igpuUV;
-                Logger.WriteLine($"Applied Curve Optimizer: {cpuUV}, Power Limit: {igpuUV}W ({backend})");
-                lines.AppendLine($"Curve Optimizer applied via {backend}");
-
+                SetUV(cpuUV);
+                lines.AppendLine($"Curve Optimizer applied: {cpuUV}");
 
                 SmuStatus? tempStatus = SetCPUTemp(cpuTemp, true);
                 if (tempStatus.HasValue) lines.AppendLine($"CPU Temp {cpuTemp}°C: {tempStatus}");

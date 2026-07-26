@@ -366,7 +366,8 @@ namespace PawnIO
             uint mw = (uint)watts * 1000;
             switch (Family)
             {
-                case CpuFamily.Raven:    return SendMp1(0x1A, mw);
+                case CpuFamily.Raven:
+                case CpuFamily.Matisse:  return SendMp1(0x1A, mw);
                 case CpuFamily.Renoir:
                     var s = SendMp1(0x14, mw);
                     SendPsmu(0x31, mw);
@@ -384,7 +385,8 @@ namespace PawnIO
             uint mw = (uint)watts * 1000;
             switch (Family)
             {
-                case CpuFamily.Raven:    return SendMp1(0x1B, mw);
+                case CpuFamily.Raven:
+                case CpuFamily.Matisse:  return SendMp1(0x1B, mw);
                 case CpuFamily.Renoir:
                     var s = SendMp1(0x15, mw);
                     SendPsmu(0x32, mw);
@@ -402,7 +404,8 @@ namespace PawnIO
             uint mw = (uint)watts * 1000;
             switch (Family)
             {
-                case CpuFamily.Raven:    return SendMp1(0x1C, mw);
+                case CpuFamily.Raven:
+                case CpuFamily.Matisse:  return SendMp1(0x1C, mw);
                 case CpuFamily.Renoir:
                     var s = SendMp1(0x16, mw);
                     SendPsmu(0x33, mw);

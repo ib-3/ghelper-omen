@@ -1114,31 +1114,11 @@ namespace GHelper
 
             if (hasControl)
             {
-                if (!CpuInfo.IsAMD)
-                {
-                    // Single slider — MSR write sets both PL1+PL2 atomically
-                    labelLeftTotal.Text = "CPU Power Limit";
-                    panelSlow.Visible = false;
-                    panelFast.Visible = false;
-                    panelCPU.Visible = false;
-                }
-                else
-                {
-                    // UXTU Adaptive Mode settings
-                    labelLeftTotal.Text = "Max Power Limit (W)";
-                    labelLeftSlow.Text = "CPU Temp Limit (°C)";
-                    labelLeftFast.Text = "Max Curve Optimizer (-)";
-                    panelSlow.Visible = true;
-                    panelFast.Visible = true;
-                    panelCPU.Visible = false;
-                    labelLiveCpuPower.Visible = false; // Hide 0.0W pkg power on AMD
-
-                    trackSlow.Min = CpuInfo.MinTemp;
-                    trackSlow.Max = CpuInfo.DefaultTemp;
-                    
-                    trackFast.Min = CpuInfo.MaxIGPUUV; // 0
-                    trackFast.Max = Math.Abs(CpuInfo.MinCPUUV); // usually 40 or 50
-                }
+                // Single slider — WMI/MSR write sets both PL1+PL2 atomically
+                labelLeftTotal.Text = "CPU Power Limit";
+                panelSlow.Visible = false;
+                panelFast.Visible = false;
+                panelCPU.Visible = false;
             }
             else
             {
@@ -1166,29 +1146,16 @@ namespace GHelper
             if (limit_total > AsusACPI.MaxTotal) limit_total = AsusACPI.MaxTotal;
             if (limit_total < AsusACPI.MinTotal) limit_total = AsusACPI.MinTotal;
 
-            if (CpuInfo.IsAMD)
-            {
-                int limit_temp = AppConfig.GetMode("cpu_temp", CpuInfo.DefaultTemp);
-                int limit_uv = Math.Abs(AppConfig.GetMode("cpu_uv", 0));
-                
-                trackTotal.Value = limit_total;
-                trackSlow.Value = Math.Clamp(limit_temp, trackSlow.Min, trackSlow.Max);
-                trackFast.Value = Math.Clamp(limit_uv, trackFast.Min, trackFast.Max);
-                trackCPU.Value = limit_cpu;
-            }
-            else
-            {
-                if (limit_slow > AsusACPI.MaxTotal) limit_slow = AsusACPI.MaxTotal;
-                if (limit_slow < AsusACPI.MinTotal) limit_slow = AsusACPI.MinTotal;
+            if (limit_slow > AsusACPI.MaxTotal) limit_slow = AsusACPI.MaxTotal;
+            if (limit_slow < AsusACPI.MinTotal) limit_slow = AsusACPI.MinTotal;
 
-                if (limit_fast > AsusACPI.MaxTotal) limit_fast = AsusACPI.MaxTotal;
-                if (limit_fast < AsusACPI.MinTotal) limit_fast = AsusACPI.MinTotal;
+            if (limit_fast > AsusACPI.MaxTotal) limit_fast = AsusACPI.MaxTotal;
+            if (limit_fast < AsusACPI.MinTotal) limit_fast = AsusACPI.MinTotal;
 
-                trackTotal.Value = limit_total;
-                trackSlow.Value = limit_total;
-                trackFast.Value = limit_total;
-                trackCPU.Value = limit_cpu;
-            }
+            trackTotal.Value = limit_total;
+            trackSlow.Value = limit_total;
+            trackFast.Value = limit_total;
+            trackCPU.Value = limit_cpu;
 
             SavePower();
             UpdatePowerLimitsVerification();
@@ -1223,34 +1190,15 @@ namespace GHelper
 
         private void SavePower()
         {
-            if (CpuInfo.IsAMD)
-            {
-                labelTotal.Text = trackTotal.Value.ToString() + "W";
-                labelSlow.Text = trackSlow.Value.ToString() + "°C";
-                labelFast.Text = trackFast.Value.ToString();
-                labelCPU.Text = trackCPU.Value.ToString() + "W";
+            labelTotal.Text = trackTotal.Value.ToString() + "W";
+            labelSlow.Text = trackSlow.Value.ToString() + "W";
+            labelCPU.Text = trackCPU.Value.ToString() + "W";
+            labelFast.Text = trackFast.Value.ToString() + "W";
 
-                AppConfig.SetMode("limit_total", trackTotal.Value);
-                // On AMD, limit_slow and limit_fast are unified with limit_total for UXTU basic adaptive mode
-                AppConfig.SetMode("limit_slow", trackTotal.Value);
-                AppConfig.SetMode("limit_fast", trackTotal.Value);
-                
-                AppConfig.SetMode("cpu_temp", trackSlow.Value);
-                AppConfig.SetMode("cpu_uv", -trackFast.Value); // CPU UV is negative internally
-                AppConfig.SetMode("limit_cpu", trackCPU.Value);
-            }
-            else
-            {
-                labelTotal.Text = trackTotal.Value.ToString() + "W";
-                labelSlow.Text = trackSlow.Value.ToString() + "W";
-                labelCPU.Text = trackCPU.Value.ToString() + "W";
-                labelFast.Text = trackFast.Value.ToString() + "W";
-
-                AppConfig.SetMode("limit_total", trackTotal.Value);
-                AppConfig.SetMode("limit_slow", trackSlow.Value);
-                AppConfig.SetMode("limit_cpu", trackCPU.Value);
-                AppConfig.SetMode("limit_fast", trackTotal.Value);
-            }
+            AppConfig.SetMode("limit_total", trackTotal.Value);
+            AppConfig.SetMode("limit_slow", trackTotal.Value); // Sync all limits to the single trackTotal slider
+            AppConfig.SetMode("limit_fast", trackTotal.Value);
+            AppConfig.SetMode("limit_cpu", trackCPU.Value);
         }
 
         private void TrackTotal_Scroll(object? sender, EventArgs e)

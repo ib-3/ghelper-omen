@@ -322,7 +322,7 @@
     <value>Charging</value>
   </data>
   <data name="Color" xml:space="preserve">
-    <value>Color</value>
+    <value>RGB</value>
   </data>
   <data name="Contrast" xml:space="preserve">
     <value>Contrast</value>

@@ -542,11 +542,32 @@ internal sealed class OmenBackend : IDisposable
             return false;
         }
 
+        if (deviceId == AsusACPI.PPT_APUA3)
+            _targetCpuPl1 = watts;
+        else if (deviceId == AsusACPI.PPT_APUA0)
+            _targetCpuPl2 = watts;
+
+        int pl1 = Math.Clamp(_targetCpuPl1 ?? AsusACPI.DefaultTotal, AsusACPI.MinTotal, AsusACPI.MaxTotal);
+        int pl2 = Math.Clamp(_targetCpuPl2 ?? pl1, AsusACPI.MinTotal, 200);
+        if (pl2 < pl1) pl2 = pl1;
+
         if (CpuInfo.IsAMD)
         {
+            bool wmiSuccess = false;
+            
+            // 1. Preferred method: WMI BIOS
+            if (_bios != null)
+            {
+                wmiSuccess = _bios.SetCpuPowerLimit(pl1, pl2);
+            }
+
+            // 2. Hardware-level method: SMU (RyzenAdj equivalent)
             if (_amdPowerProvider == null)
             {
-                try { _amdPowerProvider = new OmenCore.Hardware.AmdUndervoltProvider(); }
+                try
+                {
+                    _amdPowerProvider = new OmenCore.Hardware.AmdUndervoltProvider();
+                }
                 catch { Logger.WriteLine("OmenPowerLimit: Failed to init AmdUndervoltProvider, falling back."); }
             }
 
@@ -562,8 +583,8 @@ internal sealed class OmenBackend : IDisposable
                 else if (deviceId == AsusACPI.PPT_APUC1) // fPPT
                     status = _amdPowerProvider.SetFastPptLimit(valueMw);
 
-                bool success = status == OmenCore.Hardware.RyzenSmu.SmuStatus.Ok;
-                if (!success)
+                bool smuSuccess = status == OmenCore.Hardware.RyzenSmu.SmuStatus.Ok;
+                if (!smuSuccess)
                 {
                     if (!_amdSmuWriteFailLogged)
                     {
@@ -580,19 +601,12 @@ internal sealed class OmenBackend : IDisposable
                     Logger.WriteLine($"OmenPowerLimit: AMD SMU write OK — {watts}W");
                 }
 
-                // Always return here on AMD: the MSR path below is Intel-only (MSR 0x610)
-                // and falling through on SMU failure previously masked the real error by
-                // silently attempting Intel-specific code on an AMD CPU.
-                return success;
+                // Always return here on AMD: the MSR path below is Intel-only
+                return wmiSuccess || smuSuccess;
             }
+            
+            return wmiSuccess;
         }
-
-        if (deviceId == AsusACPI.PPT_APUA3)
-            _targetCpuPl1 = watts;
-        else
-            _targetCpuPl2 = watts;
-
-        int pl1 = Math.Clamp(_targetCpuPl1 ?? AsusACPI.DefaultTotal, AsusACPI.MinTotal, AsusACPI.MaxTotal);
 
         bool anySuccess = false;
 
@@ -604,13 +618,13 @@ internal sealed class OmenBackend : IDisposable
             int currentPl2 = status.Pl2Watts > 0 ? (int)Math.Round(status.Pl2Watts) : Math.Max(currentPl1, AsusACPI.DefaultTotal);
 
             int msrPl1 = Math.Clamp(_targetCpuPl1 ?? currentPl1, AsusACPI.MinTotal, AsusACPI.MaxTotal);
-            int pl2 = Math.Clamp(_targetCpuPl2 ?? currentPl2, AsusACPI.MinTotal, 200);
-            if (pl2 < msrPl1) pl2 = msrPl1;
+            int msrPl2 = Math.Clamp(_targetCpuPl2 ?? currentPl2, AsusACPI.MinTotal, 200);
+            if (msrPl2 < msrPl1) msrPl2 = msrPl1;
 
-            bool msrSuccess = _msrAccess.SetPowerLimits(msrPl1, pl2);
+            bool msrSuccess = _msrAccess.SetPowerLimits(msrPl1, msrPl2);
 
             if (msrSuccess)
-                Logger.WriteLine($"OmenPowerLimit: MSR write OK — PL1={msrPl1}W, PL2={pl2}W");
+                Logger.WriteLine($"OmenPowerLimit: MSR write OK — PL1={msrPl1}W, PL2={msrPl2}W");
             else
                 Logger.WriteLine("OmenPowerLimit: MSR write failed/unverified. Trying MMIO fallback...");
 

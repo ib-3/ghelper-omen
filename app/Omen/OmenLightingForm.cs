@@ -518,8 +518,8 @@ public class OmenLightingForm : RForm
 		string[] array = new string[0];
 		if (!_hasPerKey || !_isPerKeyModeActive)
 		{
-			if (_zoneColors.Length == 1) array = new string[] { "Keyboard" };
-			else if (_zoneColors.Length == 4) array = new string[] { "Left", "Center-Left", "Center-Right", "Right" };
+			if (_zoneColors.Length == 1) array = new string[] { "Zone 1" };
+			else if (_zoneColors.Length == 4) array = new string[] { "Zone 1", "Zone 2", "Zone 3", "Zone 4" };
 		}
 		foreach (Control control in groupKbdZones.Controls)
 		{

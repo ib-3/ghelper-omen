@@ -1025,6 +1025,41 @@ namespace OmenCore.Hardware
         }
 
         /// <summary>
+        /// Set CPU Power Limits via WMI BIOS (primarily used for AMD).
+        /// OGH Cmd.Default (0x20008), CommandType 0x29, data {pl2, pl1, 255, 255}
+        /// </summary>
+        public bool SetCpuPowerLimit(int pl1, int pl2)
+        {
+            if (!_isAvailable)
+            {
+                _logging?.Warn("Cannot set CPU Power Limit: WMI BIOS not available");
+                return false;
+            }
+
+            try
+            {
+                var data = new byte[] { (byte)pl2, (byte)pl1, 255, 255 };
+                _logging?.Info($"Sending CPU Power Limit command: PL1={pl1}W, PL2={pl2}W");
+                
+                var result = SendBiosCommand(BiosCmd.Default, CMD_POWER_LIMIT_SET, data, 0);
+                if (result != null)
+                {
+                    _logging?.Info($"✓ CPU Power Limit set via WMI: PL1={pl1}W, PL2={pl2}W");
+                    return true;
+                }
+                else
+                {
+                    _logging?.Warn($"CPU Power Limit command returned null.");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logging?.Error($"Failed to set CPU Power Limit via WMI: {ex.Message}", ex);
+            }
+            return false;
+        }
+
+        /// <summary>
         /// Get current GPU power settings.
         /// OmenMon: Cmd.Default, 0x21
         /// </summary>

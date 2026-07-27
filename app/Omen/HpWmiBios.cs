@@ -990,6 +990,41 @@ namespace OmenCore.Hardware
         }
 
         /// <summary>
+        /// Set Concurrent TDP (Dynamic Boost wattage offset) via WMI BIOS.
+        /// OGH Cmd.Default (0x20008), CommandType 0x29, data {255, 255, 255, limit}
+        /// </summary>
+        public bool SetConcurrentTdp(int limit)
+        {
+            if (!_isAvailable)
+            {
+                _logging?.Warn("Cannot set Concurrent TDP: WMI BIOS not available");
+                return false;
+            }
+
+            try
+            {
+                var data = new byte[] { 255, 255, 255, (byte)limit };
+                _logging?.Info($"Sending Concurrent TDP command: {limit}W");
+                
+                var result = SendBiosCommand(BiosCmd.Default, CMD_POWER_LIMIT_SET, data, 0);
+                if (result != null)
+                {
+                    _logging?.Info($"✓ Concurrent TDP set to: {limit}W");
+                    return true;
+                }
+                else
+                {
+                    _logging?.Warn($"Concurrent TDP command returned null.");
+                }
+            }
+            catch (Exception ex)
+            {
+                _logging?.Error($"Failed to set Concurrent TDP: {ex.Message}", ex);
+            }
+            return false;
+        }
+
+        /// <summary>
         /// Get current GPU power settings.
         /// OmenMon: Cmd.Default, 0x21
         /// </summary>

@@ -386,6 +386,13 @@ internal sealed class OmenBackend : IDisposable
 
             result = (_bios?.SetGpuPower(level) ?? false) ? 1 : -1;
             Logger.WriteLine($"{logName ?? (deviceId == AsusACPI.GPU_POWER ? "OmenGpuPower" : "OmenDynamicBoost")} = {level} (TGP:{powerTarget}W Boost:{dynamicBoost}W) : {(result == 1 ? "OK" : result)}");
+
+            // User request: Send the exact main GPU slider value to the BIOS via Concurrent TDP (WMI 131080 / 41)
+            if (deviceId == AsusACPI.GPU_POWER)
+            {
+                _bios?.SetConcurrentTdp(status);
+            }
+
             return true;
         }
 

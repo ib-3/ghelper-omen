@@ -306,7 +306,7 @@ internal sealed class OmenBackend : IDisposable
             AsusACPI.GPUEcoROG or AsusACPI.GPUEcoVivo => _bios?.IsAvailable ?? false, // OMEN has Optimus (iGPU-only) mode
             AsusACPI.GPUMuxROG or AsusACPI.GPUMuxVivo => _bios?.IsAvailable ?? false, // Hybrid/Discrete MUX
             AsusACPI.GPU_POWER => _bios?.IsAvailable ?? false,
-            AsusACPI.PPT_GPUC0 => _bios?.IsAvailable ?? false, // Dynamic Boost
+            AsusACPI.PPT_GPUC0 => false, // Dynamic Boost - hidden, handled natively by GPU_POWER slider
             AsusACPI.PPT_APUA3 or AsusACPI.PPT_APUA0 or AsusACPI.PPT_APUC1 => HasCpuPowerLimitControl,
             _ => false
         };

@@ -2192,13 +2192,16 @@ namespace OmenCore.Hardware
         {
             try
             {
-                using var searcher = new System.Management.ManagementObjectSearcher("root\\HP\\InstrumentedBIOS", "SELECT CurrentValue FROM HP_BIOSSetting WHERE Name='Adaptive Battery Extender'");
+                using var searcher = new System.Management.ManagementObjectSearcher("root\\HP\\InstrumentedBIOS", "SELECT * FROM HP_BIOSSetting");
                 foreach (System.Management.ManagementObject obj in searcher.Get())
                 {
-                    var val = obj["CurrentValue"]?.ToString();
-                    var enabled = val != null && val.Contains("Enable");
-                    _logging?.Info($"Battery care mode (Adaptive Battery Extender): {(enabled ? "Enabled (80%)" : "Disabled (100%)")}");
-                    return enabled;
+                    if (obj["Name"]?.ToString() == "Adaptive Battery Extender")
+                    {
+                        var val = obj["CurrentValue"]?.ToString();
+                        var enabled = val != null && val.Contains("Enable");
+                        _logging?.Info($"Battery care mode (Adaptive Battery Extender): {(enabled ? "Enabled (80%)" : "Disabled (100%)")}");
+                        return enabled;
+                    }
                 }
             }
             catch (Exception ex)
@@ -2219,25 +2222,30 @@ namespace OmenCore.Hardware
             try
             {
                 string valueToSet = enabled ? "Enable" : "Disable";
-                using var methodClass = new System.Management.ManagementClass("root\\HP\\InstrumentedBIOS", "HP_BIOSSettingInterface", null);
-                var inParams = methodClass.GetMethodParameters("SetBIOSSetting");
-                inParams["Name"] = "Adaptive Battery Extender";
-                inParams["Value"] = valueToSet;
-                inParams["Password"] = "<utf-16/>";
-                
-                var outParams = methodClass.InvokeMethod("SetBIOSSetting", inParams, null);
-                if (outParams != null)
+                using var searcher = new System.Management.ManagementObjectSearcher("root\\HP\\InstrumentedBIOS", "SELECT * FROM HP_BIOSSettingInterface");
+                foreach (System.Management.ManagementObject obj in searcher.Get())
                 {
-                    uint result = (uint)outParams["Return"];
-                    _logging?.Info($"✓ Battery care mode set to {valueToSet}: {(result == 0 ? "Success" : $"Error {result}")}");
-                    return result == 0;
+                    var inParams = obj.GetMethodParameters("SetBIOSSetting");
+                    inParams["Name"] = "Adaptive Battery Extender";
+                    inParams["Value"] = valueToSet;
+                    inParams["Password"] = "<utf-16/>";
+                    
+                    var outParams = obj.InvokeMethod("SetBIOSSetting", inParams, null);
+                    if (outParams != null)
+                    {
+                        uint result = (uint)outParams["Return"];
+                        _logging?.Info($"✓ Battery care mode set to {valueToSet}: {(result == 0 ? "Success" : $"Error {result}")}");
+                        return result == 0;
+                    }
                 }
+                _logging?.Warn($"Failed to set battery care mode: HP_BIOSSettingInterface instance not found.");
+                return false;
             }
             catch (Exception ex)
             {
-                _logging?.Error($"Failed to set battery care mode: {ex.Message}", ex);
+                _logging?.Error($"Failed to set battery care mode: {ex.Message} | exception={ex.GetType().Name}: {ex.Message}");
+                return false;
             }
-            return false;
         }
         
         #endregion

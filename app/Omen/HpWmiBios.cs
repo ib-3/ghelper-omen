@@ -913,7 +913,7 @@ namespace OmenCore.Hardware
         /// Set GPU power preset.
         /// OmenMon: Cmd.Default, 0x22
         /// </summary>
-        public bool SetGpuPower(GpuPowerLevel level)
+        public bool SetGpuPower(GpuPowerLevel level, int tempTarget = 0, int dState = 1)
         {
             if (!_isAvailable)
             {
@@ -947,10 +947,10 @@ namespace OmenCore.Hardware
                         data[1] = (byte)(level - GpuPowerLevel.Maximum + 1); // PPAB = 2, 3, etc.
                         break;
                 }
-                data[2] = 0x01; // DState = D1
-                data[3] = 0x00; // PeakTemperature
+                data[2] = (byte)dState; // DState = D1, D3, or D0
+                data[3] = (byte)tempTarget; // PeakTemperature
 
-                _logging?.Info($"Sending GPU power command: Level={level}, CustomTgp={data[0]}, PPAB={data[1]}, DState={data[2]}");
+                _logging?.Info($"Sending GPU power command: Level={level}, CustomTgp={data[0]}, PPAB={data[1]}, DState={data[2]}, PeakTemp={data[3]}");
                 _logging?.Debug($"[GitHub #91 Debug] GPU power bytes: [{string.Join(",", data)}]");
                 
                 var result = SendBiosCommand(BiosCmd.Default, CMD_GPU_SET_POWER, data, 0);
@@ -2190,21 +2190,20 @@ namespace OmenCore.Hardware
         /// <returns>True if charge limit is enabled (~80%), False if full charge, null if unavailable</returns>
         public bool? GetBatteryCareMode()
         {
-            if (!_isAvailable) return null;
-            
             try
             {
-                var result = SendBiosCommand(BiosCmd.Default, CMD_BATTERY_CARE, new byte[4], 4);
-                if (result != null && result.Length >= 1)
+                using var searcher = new System.Management.ManagementObjectSearcher("root\\HP\\InstrumentedBIOS", "SELECT CurrentValue FROM HP_BIOSSetting WHERE Name='Adaptive Battery Extender'");
+                foreach (System.Management.ManagementObject obj in searcher.Get())
                 {
-                    var enabled = result[0] == (byte)BatteryCareMode.Enabled;
-                    _logging?.Info($"Battery care mode: {(enabled ? "Enabled (80%)" : "Disabled (100%)")}");
+                    var val = obj["CurrentValue"]?.ToString();
+                    var enabled = val != null && val.Contains("Enable");
+                    _logging?.Info($"Battery care mode (Adaptive Battery Extender): {(enabled ? "Enabled (80%)" : "Disabled (100%)")}");
                     return enabled;
                 }
             }
             catch (Exception ex)
             {
-                _logging?.Warn($"Failed to get battery care mode: {ex.Message}");
+                _logging?.Warn($"Failed to get battery care mode from WMI: {ex.Message}");
             }
             return null;
         }
@@ -2217,25 +2216,21 @@ namespace OmenCore.Hardware
         /// <returns>True if successful</returns>
         public bool SetBatteryCareMode(bool enabled)
         {
-            if (!_isAvailable)
-            {
-                _logging?.Warn("Cannot set battery care mode: WMI BIOS not available");
-                return false;
-            }
-            
             try
             {
-                var data = new byte[4];
-                data[0] = enabled ? (byte)BatteryCareMode.Enabled : (byte)BatteryCareMode.Disabled;
-                data[1] = 0x00;
-                data[2] = 0x00;
-                data[3] = 0x00;
+                string valueToSet = enabled ? "Enable" : "Disable";
+                using var methodClass = new System.Management.ManagementClass("root\\HP\\InstrumentedBIOS", "HP_BIOSSettingInterface", null);
+                var inParams = methodClass.GetMethodParameters("SetBIOSSetting");
+                inParams["Name"] = "Adaptive Battery Extender";
+                inParams["Value"] = valueToSet;
+                inParams["Password"] = "<utf-16/>";
                 
-                var result = SendBiosCommand(BiosCmd.Default, CMD_BATTERY_CARE, data, 0);
-                if (result != null)
+                var outParams = methodClass.InvokeMethod("SetBIOSSetting", inParams, null);
+                if (outParams != null)
                 {
-                    _logging?.Info($"✓ Battery care mode set: {(enabled ? "Enabled (80%)" : "Disabled (100%)")}");
-                    return true;
+                    uint result = (uint)outParams["Return"];
+                    _logging?.Info($"✓ Battery care mode set to {valueToSet}: {(result == 0 ? "Success" : $"Error {result}")}");
+                    return result == 0;
                 }
             }
             catch (Exception ex)

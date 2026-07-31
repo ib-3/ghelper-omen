@@ -20,6 +20,7 @@ namespace GHelper
 {
     public partial class SettingsForm : RForm
     {
+        private CheckBox checkOmenBattery;
         ContextMenuStrip contextMenuStrip = new CustomContextMenu();
         ToolStripMenuItem menuEco, menuStandard, menuUltimate, menuOptimized;
         DonateControl donateControl;
@@ -58,6 +59,16 @@ namespace GHelper
         {
 
             InitializeComponent();
+            
+            checkOmenBattery = new CheckBox();
+            checkOmenBattery.Text = "Adaptive Battery Extender (80%)";
+            checkOmenBattery.AutoSize = true;
+            checkOmenBattery.Location = new Point(20, 60);
+            checkOmenBattery.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+            checkOmenBattery.Margin = new Padding(4);
+            checkOmenBattery.CheckedChanged += CheckOmenBattery_CheckedChanged;
+            panelBattery.Controls.Add(checkOmenBattery);
+            
             InitTheme(true);
 
             gpuControl = new GPUModeControl(this);
@@ -334,6 +345,14 @@ namespace GHelper
         private void ButtonHDRControl_Click(object? sender, EventArgs e)
         {
             ScreenControl.ToogleHDRControl();
+        }
+
+        private void CheckOmenBattery_CheckedChanged(object? sender, EventArgs e)
+        {
+            if (Program.acpi?.IsOmen() == true)
+            {
+                BatteryControl.SetBatteryChargeLimit(checkOmenBattery.Checked ? 80 : 100);
+            }
         }
 
         private void SliderBattery_ValueChanged(object? sender, EventArgs e)
@@ -2034,6 +2053,24 @@ namespace GHelper
 
         public void VisualiseBattery(int limit)
         {
+            if (Program.acpi?.IsOmen() == true)
+            {
+                sliderBattery.Visible = false;
+                buttonBatteryFull.Visible = false;
+                checkOmenBattery.Visible = true;
+                labelBatteryTitle.Text = "Adaptive Battery Extender";
+                
+                checkOmenBattery.CheckedChanged -= CheckOmenBattery_CheckedChanged;
+                int currentLimit = Program.acpi.DeviceGet(AsusACPI.BatteryLimit);
+                checkOmenBattery.Checked = currentLimit < 100;
+                checkOmenBattery.CheckedChanged += CheckOmenBattery_CheckedChanged;
+                return;
+            }
+            
+            checkOmenBattery.Visible = false;
+            sliderBattery.Visible = true;
+            buttonBatteryFull.Visible = true;
+
             VisualiseBatteryTitle(limit);
             sliderBattery.Value = limit;
 

@@ -81,19 +81,44 @@ namespace GHelper.Gpu
                 return;
             }
 
-            var restart = false;
+            int status;
             var changed = false;
 
-            int status;
-
-            if (GPUMode == AsusACPI.GPUModeUltimate || GPUMode == AsusACPI.GPUModeStandard)
+            if (GPUMode == AsusACPI.GPUModeUltimate)
             {
+                status = Program.acpi.DeviceSet(AsusACPI.GPUMux, 0, "GPUMux");
+                settings.VisualiseGPUMode(GPUMode);
+                changed = true;
+                
+                // Restart services and recreate GPU control for Ultimate mode
+                Task.Run(async () =>
+                {
+                    await Task.Delay(TimeSpan.FromMilliseconds(AppConfig.Get("nv_delay", 5000)));
+
+                    if (AppConfig.IsNVPlatform())
+                    {
+                        NvidiaGpuControl.RestartNVService();
+                        await Task.Delay(TimeSpan.FromMilliseconds(1000));
+                    }
+                    else
+                    {
+                        NvidiaGpuControl.FixNvContainer();
+                    }
+
+                    HardwareControl.RecreateGpuControl();
+                    Program.modeControl.SetGPUClocks(false);
+                });
+            }
+            else if (GPUMode == AsusACPI.GPUModeStandard)
+            {
+                status = Program.acpi.DeviceSet(AsusACPI.GPUMux, 1, "GPUMux");
                 settings.VisualiseGPUMode(GPUMode);
                 SetGPUEco(0);
                 changed = true;
             }
             else if (GPUMode == AsusACPI.GPUModeEco)
             {
+                status = Program.acpi.DeviceSet(AsusACPI.GPUMux, 1, "GPUMux");
                 settings.VisualiseGPUMode(GPUMode);
                 SetGPUEco(1);
                 changed = true;
@@ -102,12 +127,6 @@ namespace GHelper.Gpu
             if (changed)
             {
                 AppConfig.Set("gpu_mode", GPUMode);
-            }
-
-            if (restart)
-            {
-                settings.VisualiseGPUMode();
-                Process.Start("shutdown", "/r /t 1");
             }
 
         }

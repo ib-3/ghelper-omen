@@ -143,7 +143,13 @@ namespace GHelper
 
             Application.EnableVisualStyles();
 
-            if (!HardwareControl.IsEcoMode()) HardwareControl.RecreateGpuControl();
+            if (!HardwareControl.IsEcoMode())
+            {
+                HardwareControl.RecreateGpuControl();
+#if DEBUG
+                acpi.InitializeGpuPowerController();
+#endif
+            }
 
             trayIcon = new NotifyIcon
             {

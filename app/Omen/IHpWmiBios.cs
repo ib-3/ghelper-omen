@@ -27,7 +27,7 @@ namespace OmenCore.Hardware
         void ExtendFanCountdown();
 
         (bool customTgp, bool ppab, int dState)? GetGpuPower();
-        bool SetGpuPower(HpWmiBios.GpuPowerLevel level);
+        bool SetGpuPower(HpWmiBios.GpuPowerLevel level, int tempTarget = 0, int dState = 1);
         HpWmiBios.GpuMode? GetGpuMode();
 
         // ── Keyboard lighting ─────────────────────────────────────────────

@@ -367,3 +367,14 @@ MigrationBackup/
 FodyWeavers.xsd
 
 tools/
+# Temporary AI & Debugging files
+*.diff
+*.patch
+debug*.txt
+CheckTemps.ps1
+*.py
+ilspy*
+v0.2.0_*.cs
+test_*.cs
+decompiled_build*/
+gpu_calibrator_hits.txt

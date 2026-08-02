@@ -30,7 +30,7 @@ internal sealed class OmenBackend : IDisposable
     private readonly HpWmiBios? _bios;
     // Nullable: both WMI and EC fan controllers can fail to initialize.
     private readonly IFanController? _fans;
-    private readonly WmiBiosMonitor? _monitor; // [NEW] High-precision monitor
+    private readonly WmiBiosMonitor? _monitor; //  High-precision monitor
     private readonly IMsrAccess? _msrAccess;   // PawnIO MSR — null on Ryzen or if PawnIO not installed
     // PowerLimitController removed
     private OmenCore.Hardware.IMmioAccess? _mmioAccess;
@@ -41,7 +41,9 @@ internal sealed class OmenBackend : IDisposable
     private int _lastEvaluatedCpuPercent = -1;
     private int _lastEvaluatedGpuPercent = -1;
 
-    // [MODIFIED] Constructor now accepts WmiBiosMonitor + msrAccess
+    public WmiBiosMonitor? Monitor => _monitor;
+
+    //  Constructor now accepts WmiBiosMonitor + msrAccess
     private OmenBackend(LoggingService logging, HpWmiBios? bios, IFanController? fans, WmiBiosMonitor? monitor, IMsrAccess? msrAccess)
     {
         _logging = logging;
@@ -83,8 +85,8 @@ internal sealed class OmenBackend : IDisposable
             if (maxPower > 0 && maxPower < 500)
             {
                 bool isLaptop = System.Windows.Forms.SystemInformation.PowerStatus.BatteryChargeStatus != System.Windows.Forms.BatteryChargeStatus.NoSystemBattery;
-                int maxAllowed = isLaptop ? 180 : 500;
-                AsusACPI.MaxTotal = Math.Min(Math.Max(maxPower, 150), maxAllowed);
+                int maxAllowed = isLaptop ? 127 : 500;
+                AsusACPI.MaxTotal = Math.Min(Math.Max(maxPower, 127), maxAllowed);
                 Logger.WriteLine($"[OmenBackend] MaxTotal set to {AsusACPI.MaxTotal}W (detected {maxPower}W from {(fromMmio ? "MMIO" : "MSR")}, isLaptop: {isLaptop})");
             }
         }
@@ -213,7 +215,7 @@ internal sealed class OmenBackend : IDisposable
             {
                 if (bios != null && bios.ThermalPolicy >= OmenCore.Hardware.HpWmiBios.ThermalPolicyVersion.V2)
                 {
-                    // [NEW] Provide logging and nvapi instances
+                    //  Provide logging and nvapi instances
                     monitor = new WmiBiosMonitor(logging, nvapi);
                 }
             }
@@ -244,7 +246,7 @@ internal sealed class OmenBackend : IDisposable
 
             Logger.WriteLine($"OMEN backend: BIOS={bios?.Status ?? "null"}, Fans={fans?.Status ?? "null"}, Monitor={monitor?.MonitoringSource ?? "null"}");
 
-            // [MODIFIED] Return backend with monitor + MSR access
+            //  Return backend with monitor + MSR access
             return new OmenBackend(logging, bios, fans, monitor, msrAccess);
 
             /* [LEGACY TRYCREATE RETURN]
@@ -297,16 +299,17 @@ internal sealed class OmenBackend : IDisposable
             AsusACPI.PerformanceMode => IsAvailable,
             AsusACPI.BatteryLimit => _bios?.IsAvailable ?? false,
             
-            // [MODIFIED] Temps now supported as long as either BIOS or Monitor is available
+            //  Temps now supported as long as either BIOS or Monitor is available
             AsusACPI.Temp_CPU or AsusACPI.Temp_GPU => IsAvailable,
-            /* [LEGACY SUPPORT] 
+            /* LEGACY SUPPORT 
             AsusACPI.Temp_CPU or AsusACPI.Temp_GPU => _bios?.IsAvailable ?? false, 
             */
             
             AsusACPI.GPUEcoROG or AsusACPI.GPUEcoVivo => _bios?.IsAvailable ?? false, // OMEN has Optimus (iGPU-only) mode
             AsusACPI.GPUMuxROG or AsusACPI.GPUMuxVivo => _bios?.IsAvailable ?? false, // Hybrid/Discrete MUX
             AsusACPI.GPU_POWER => _bios?.IsAvailable ?? false,
-            AsusACPI.PPT_GPUC0 => false, // Dynamic Boost - hidden, handled natively by GPU_POWER slider
+            AsusACPI.PPT_GPUC0 => _bios?.IsAvailable ?? false, // Dynamic Boost via WMI Concurrent TDP
+            AsusACPI.PPT_GPUC2 => _bios?.IsAvailable ?? false, // GPU Temp Target
             AsusACPI.PPT_APUA3 or AsusACPI.PPT_APUA0 or AsusACPI.PPT_APUC1 => HasCpuPowerLimitControl,
             _ => false
         };
@@ -367,32 +370,17 @@ internal sealed class OmenBackend : IDisposable
         if (deviceId == AsusACPI.GPUMuxROG || deviceId == AsusACPI.GPUMuxVivo)
         {
             var targetMode = status == 0 ? HpWmiBios.GpuMode.Discrete : HpWmiBios.GpuMode.Hybrid;
-            result = _bios.SetGpuMode(targetMode) ? 1 : -1;
+            result = _bios?.SetGpuMode(targetMode) == true ? 1 : -1;
             Logger.WriteLine($"{logName ?? "OmenGpuMux"} = {targetMode} : {(result == 1 ? "OK" : result)}");
+            ApplyGpuPower(forceDState: status == 0 ? 0 : 1);
             return true;
         }
 
-        if (deviceId == AsusACPI.GPU_POWER || deviceId == AsusACPI.PPT_GPUC0)
+        if (deviceId == AsusACPI.GPU_POWER || deviceId == AsusACPI.PPT_GPUC0 || deviceId == AsusACPI.PPT_GPUC2)
         {
-            // Omen WMI combines Base TGP and Dynamic Boost into a single 3-state command
-            int powerTarget = deviceId == AsusACPI.GPU_POWER ? status : AppConfig.GetMode("gpu_power");
-            int dynamicBoost = deviceId == AsusACPI.PPT_GPUC0 ? status : AppConfig.GetMode("gpu_boost");
-
-            HpWmiBios.GpuPowerLevel level = HpWmiBios.GpuPowerLevel.Medium;
-            if (dynamicBoost > 5) 
-                level = HpWmiBios.GpuPowerLevel.Maximum; // Enable PPAB (Dynamic Boost)
-            else if (powerTarget <= 10) 
-                level = HpWmiBios.GpuPowerLevel.Minimum; // Standard TGP
-
-            result = (_bios?.SetGpuPower(level) ?? false) ? 1 : -1;
-            Logger.WriteLine($"{logName ?? (deviceId == AsusACPI.GPU_POWER ? "OmenGpuPower" : "OmenDynamicBoost")} = {level} (TGP:{powerTarget}W Boost:{dynamicBoost}W) : {(result == 1 ? "OK" : result)}");
-
-            // User request: Send the exact main GPU slider value to the BIOS via Concurrent TDP (WMI 131080 / 41)
-            if (deviceId == AsusACPI.GPU_POWER)
-            {
-                _bios?.SetConcurrentTdp(status);
-            }
-
+            ApplyGpuPower();
+            
+            result = 1;
             return true;
         }
 
@@ -404,6 +392,68 @@ internal sealed class OmenBackend : IDisposable
         }
 
         return false;
+    }
+
+    public void ApplyGpuPower(int forceDState = -1)
+    {
+        if (_bios == null || !_bios.IsAvailable) return;
+        int dynamicBoost = AppConfig.GetMode("gpu_boost");
+
+        if (AppConfig.IsOmen())
+        {
+            if (AppConfig.GetMode("omen_unleashed") == 1)
+            {
+                dynamicBoost = 255;
+            }
+            else if (!AppConfig.Is("dev_mode"))
+            {
+                dynamicBoost = 0;
+            }
+        }
+
+        int powerTarget = AppConfig.GetMode("gpu_power");
+        int tempTarget = AppConfig.GetMode("gpu_temp");
+        
+        int currentGpuMode = AppConfig.Get("gpu_mode");
+        int currentPerfMode = AppConfig.Get("performance_mode");
+        
+        int dState = forceDState;
+        if (dState < 0)
+        {
+            // Map D-State natively to Performance Mode, just like OGH does.
+            // 2 = Turbo (D0), 1 = Balanced (D1), 0 = Silent (D2/3)
+            dState = currentPerfMode == 2 ? 0 : (currentPerfMode == 1 ? 1 : 3);
+        }
+
+        if (tempTarget < 70) tempTarget = 87; // default temp limit
+
+        // Eco forces to 30w
+        if (currentGpuMode == AsusACPI.GPUModeEco || dState == 3)
+        {
+            powerTarget = 30;
+            dynamicBoost = 0;
+        }
+        // Balanced unlocks, but ultimate mode same as balanced just with dynamic boost enabled
+        else if (currentGpuMode == AsusACPI.GPUModeStandard || dState == 1)
+        {
+            dynamicBoost = 0;
+        }
+
+        HpWmiBios.GpuPowerLevel level = HpWmiBios.GpuPowerLevel.Medium;
+        if (dynamicBoost > 0) 
+            level = HpWmiBios.GpuPowerLevel.Maximum; // Enable PPAB (Dynamic Boost)
+        else if (powerTarget > 0 && powerTarget <= 30) 
+            level = HpWmiBios.GpuPowerLevel.Minimum; // Standard TGP
+
+        _bios.SetGpuPower(level, tempTarget, dState);
+        
+        // Do not send the Concurrent TDP (TPP offset) in Eco Mode
+        if (dState != 3) 
+        {
+            _bios.SetConcurrentTdp(Math.Max(0, dynamicBoost));
+        }
+        
+        Logger.WriteLine($"OmenGpuPowerAuto Level:{level} Boost:{dynamicBoost}W TGP:{powerTarget}W Temp:{tempTarget}C DState:{dState}");
     }
 
     public bool TryDeviceSet(uint deviceId, byte[] parameters, string? logName, out int result)
@@ -424,6 +474,8 @@ internal sealed class OmenBackend : IDisposable
         var targetMode = eco == 1 ? HpWmiBios.GpuMode.Optimus : HpWmiBios.GpuMode.Hybrid;
         result = _bios.SetGpuMode(targetMode) ? 1 : -1;
         Logger.WriteLine($"OmenGpuEco eco={eco} → {targetMode} : {(result == 1 ? "OK" : result)}");
+        
+        ApplyGpuPower(forceDState: eco == 1 ? 3 : 1);
         return true;
     }
 
@@ -431,7 +483,7 @@ internal sealed class OmenBackend : IDisposable
 
     public bool TryDeviceGet(uint deviceId, out int result)
     {
-        // [NEW] Temperature interception logic using high-precision monitor
+        //  Temperature interception logic using high-precision monitor
         if (deviceId == AsusACPI.Temp_CPU || deviceId == AsusACPI.Temp_GPU)
         {
             // Skip NVAPI GPU queries if in Eco mode, fall through to WMI BIOS fallback
@@ -475,10 +527,10 @@ internal sealed class OmenBackend : IDisposable
             AsusACPI.DevsCPUFanCurve or AsusACPI.DevsGPUFanCurve => IsAvailable ? 1 : -1,
             AsusACPI.DevsCPUFan or AsusACPI.DevsGPUFan => IsAvailable ? 1 : -1,
             
-            // [MODIFIED] High-precision path above intercepting; switched to legacy fallbacks here
+            //  High-precision path above intercepting; switched to legacy fallbacks here
             AsusACPI.Temp_CPU => -1, // Force HardwareControl.cs to use the PerfCounter fallback (TSZ0) instead of broken HP WMI
             AsusACPI.Temp_GPU => (int)(_bios?.GetGpuTemperature() ?? -1),
-            /* [LEGACY GET]
+            /* LEGACY GET
             AsusACPI.Temp_CPU => (int)(_bios?.GetTemperature() ?? -1),
             AsusACPI.Temp_GPU => (int)(_bios?.GetGpuTemperature() ?? -1),
             */
@@ -488,6 +540,7 @@ internal sealed class OmenBackend : IDisposable
             // GPUMux: Discrete=0 (Ultimate), Hybrid=1 (Standard)
             AsusACPI.GPUMuxROG or AsusACPI.GPUMuxVivo => ReadGpuMuxFlag(),
             AsusACPI.GPU_POWER => ReadGpuPowerFlag(),
+            AsusACPI.PPT_GPUC2 => AppConfig.GetMode("gpu_temp"),
             AsusACPI.PPT_APUA3 => ReadCpuPowerLimit(false),
             AsusACPI.PPT_APUA0 or AsusACPI.PPT_APUC1 => ReadCpuPowerLimit(true),
             _ => int.MinValue
@@ -510,8 +563,14 @@ internal sealed class OmenBackend : IDisposable
 
     private int ReadGpuMuxFlag()
     {
-        // The user requested to hide the Ultimate button for Omen and Victus laptops.
-        return -1;
+        try
+        {
+            var mode = _bios?.GetGpuMode();
+            if (mode.HasValue)
+                return mode.Value == HpWmiBios.GpuMode.Discrete ? 0 : 1;
+        }
+        catch { }
+        return AppConfig.Get("gpu_mode") == AsusACPI.GPUModeUltimate ? 0 : 1;
     }
 
     private int ReadGpuPowerFlag()
@@ -1169,7 +1228,7 @@ public class AsusACPI
     public static int MaxCPU = 100;
     public const int DefaultCPU = 80;
 
-    public const int MinGPUBoost = 5;
+    public static int MinGPUBoost = 0;
     public static int MaxGPUBoost = 25;
 
     public static int MinGPUPower = 0;
@@ -1270,6 +1329,16 @@ public class AsusACPI
     public bool IsConnected()
     {
         return _connected || _omen?.IsAvailable == true;
+    }
+
+    public void InitializeGpuPowerController()
+    {
+#if DEBUG
+        // if (_omen is OmenBackend backend && backend.Monitor != null)
+        // {
+        //     Task.Run(() => OmenCore.Hardware.GpuPowerController.Initialize(backend.Monitor));
+        // }
+#endif
     }
 
     public AsusACPI()

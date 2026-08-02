@@ -358,7 +358,7 @@ public static class HardwareControl
                     batteryRate = (decimal)directStatus.Value.Rate / 1000;
             }
 
-            // [NEW] Manual calculation fallback for models that don't support rate querying
+            //  Manual calculation fallback for models that don't support rate querying
             if (batteryRate == 0 && chargeCapacity > 0)
             {
                 if (_lastCapacity > 0 && _lastCapacityTime > 0)

@@ -1015,13 +1015,14 @@ namespace OmenCore.Hardware
                 else
                 {
                     _logging?.Warn($"Concurrent TDP command returned null.");
+                    return false;
                 }
             }
             catch (Exception ex)
             {
                 _logging?.Error($"Failed to set Concurrent TDP: {ex.Message}", ex);
+                return false;
             }
-            return false;
         }
 
         /// <summary>
@@ -1038,18 +1039,52 @@ namespace OmenCore.Hardware
 
             try
             {
-                var data = new byte[] { (byte)pl2, (byte)pl1, 255, 255 };
-                _logging?.Info($"Sending CPU Power Limit command: PL1={pl1}W, PL2={pl2}W");
-                
-                var result = SendBiosCommand(BiosCmd.Default, CMD_POWER_LIMIT_SET, data, 0);
-                if (result != null)
+                if (pl1 > 127 || pl2 > 127)
                 {
-                    _logging?.Info($"✓ CPU Power Limit set via WMI: PL1={pl1}W, PL2={pl2}W");
-                    return true;
+                    // Use two-byte command (0x37 / 55) for limits > 127W
+                    byte[] data = new byte[128];
+                    data[0] = 32;
+                    data[1] = 0;
+                    data[2] = byte.MaxValue; // PL4 LSB
+                    data[3] = byte.MaxValue; // PL4 MSB
+                    data[4] = 0;
+                    data[5] = 0;
+                    data[6] = (byte)(pl2 & 0xFF);
+                    data[7] = (byte)((pl2 >> 8) & 0xFF);
+                    data[8] = 0;
+                    data[9] = 0;
+                    data[10] = (byte)(pl1 & 0xFF);
+                    data[11] = (byte)((pl1 >> 8) & 0xFF);
+                    data[12] = 0;
+                    data[13] = 0;
+
+                    _logging?.Info($"Sending Two-Byte CPU Power Limit command: PL1={pl1}W, PL2={pl2}W");
+                    var result = SendBiosCommand(BiosCmd.Default, CMD_POWER_LIMIT_2BYTE, data, 0);
+                    if (result != null)
+                    {
+                        _logging?.Info($"✓ CPU Power Limit set via WMI (2-byte): PL1={pl1}W, PL2={pl2}W");
+                        return true;
+                    }
+                    else
+                    {
+                        _logging?.Warn($"CPU Power Limit 2-byte command returned null.");
+                    }
                 }
                 else
                 {
-                    _logging?.Warn($"CPU Power Limit command returned null.");
+                    var data = new byte[] { (byte)pl2, (byte)pl1, 255, 255 };
+                    _logging?.Info($"Sending CPU Power Limit command: PL1={pl1}W, PL2={pl2}W");
+                    
+                    var result = SendBiosCommand(BiosCmd.Default, CMD_POWER_LIMIT_SET, data, 0);
+                    if (result != null)
+                    {
+                        _logging?.Info($"✓ CPU Power Limit set via WMI: PL1={pl1}W, PL2={pl2}W");
+                        return true;
+                    }
+                    else
+                    {
+                        _logging?.Warn($"CPU Power Limit command returned null.");
+                    }
                 }
             }
             catch (Exception ex)
@@ -1091,9 +1126,9 @@ namespace OmenCore.Hardware
 
             try
             {
-                if (pl1 > 254)
+                if (pl1 > 127)
                 {
-                    // Use two-byte command (0x37 / 55) for limits > 254W
+                    // Use two-byte command (0x37 / 55) for limits > 127W
                     byte[] data = new byte[128];
                     data[0] = 32;
                     data[1] = 0;

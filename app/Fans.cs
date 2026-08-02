@@ -150,9 +150,13 @@ namespace GHelper
             trackTotal.KeyUp += TrackPower_KeyUp;
             trackSlow.KeyUp += TrackPower_KeyUp;
 
+            checkOmenUnleashed.CheckedChanged += CheckOmenUnleashed_CheckedChanged;
+
             checkApplyFans.Click += CheckApplyFans_Click;
             checkSyncFans.Click += CheckSyncFans_Click;
             checkApplyPower.Click += CheckApplyPower_Click;
+
+            FormPosition();
 
             trackGPUClockLimit.Minimum = NvidiaGpuControl.MinClockLimit;
             trackGPUClockLimit.Maximum = NvidiaGpuControl.MaxClockLimit;
@@ -177,8 +181,19 @@ namespace GHelper
             trackGPUMemory.Scroll += trackGPU_Scroll;
 
             trackGPUBoost.Scroll += trackGPUPower_Scroll;
+            checkOmenLegacySpg.CheckedChanged += trackGPUPower_Scroll;
             trackGPUTemp.Scroll += trackGPUPower_Scroll;
             trackGPUPower.Scroll += trackGPUPower_Scroll;
+
+#if DEBUG
+            buttonCalibrate.Click += buttonCalibrate_Click;
+#endif
+            
+            var modelTimer = new System.Windows.Forms.Timer { Interval = 5000 };
+            modelTimer.Tick += (s, e) => {
+                if (this.Visible) UpdateModelStatus();
+            };
+            modelTimer.Start();
 
             trackGPUCore.MouseUp += TrackGPUClocks_MouseUp;
             trackGPUMemory.MouseUp += TrackGPUClocks_MouseUp;
@@ -259,8 +274,6 @@ namespace GHelper
             checkFanClamp.Click += CheckFanClamp_Click;
 
             ToggleNavigation(0);
-
-
 
             FormClosed += Fans_FormClosed;
             Activated  += (_, _) => VisualiseAdvanced();
@@ -545,7 +558,7 @@ namespace GHelper
             gpuPowerBase = Program.acpi.DeviceGet(AsusACPI.GPU_BASE);
             if (gpuPowerBase >= 0) Logger.WriteLine($"ReadGPUPowerBase: {gpuPowerBase}");
 
-            var smiLimits = NvidiaSmi.GetPowerLimits();
+            var smiLimits = !AppConfig.IsOmen() ? NvidiaSmi.GetPowerLimits() : null;
             if (smiLimits.HasValue && gpuPowerBase <= 0)
             {
                 IsSmiPowerLimit = true;
@@ -565,9 +578,18 @@ namespace GHelper
             }
 
             panelGPUPower.Visible = isGPUPower;
+            buttonCalibrate.Visible = false;
+            lblModelStatus.Visible = false;
             if (!isGPUPower) return;
 
-            int maxGPUPower = NvidiaSmi.GetMaxGPUPower();
+            var nvLimits = !AppConfig.IsOmen() ? NvidiaSmi.GetPowerLimits() : null;
+            if (nvLimits.HasValue && nvLimits.Value.Maximum > nvLimits.Value.Default)
+            {
+                // Use hardware-reported difference between Max and Default TGP as the absolute Dynamic Boost limit!
+                AsusACPI.MaxGPUBoost = nvLimits.Value.Maximum - nvLimits.Value.Default;
+            }
+
+            int maxGPUPower = nvLimits.HasValue ? nvLimits.Value.Maximum : (!AppConfig.IsOmen() ? NvidiaSmi.GetMaxGPUPower() : 0);
             if (maxGPUPower > 0)
             {
                 AsusACPI.MaxGPUPower = maxGPUPower - gpuPowerBase - AsusACPI.MaxGPUBoost;
@@ -659,6 +681,34 @@ namespace GHelper
                         trackGPUCore.Value = Math.Max(Math.Min(core, NvidiaGpuControl.MaxCoreOffset), NvidiaGpuControl.MinCoreOffset);
                         trackGPUMemory.Value = Math.Max(Math.Min(memory, NvidiaGpuControl.MaxMemoryOffset), NvidiaGpuControl.MinMemoryOffset);
 
+                        if (AppConfig.IsOmen())
+                        {
+                            var limits = NvidiaSmi.GetPowerLimits();
+                            if (limits.HasValue && limits.Value.Maximum > limits.Value.Default && limits.Value.Default > 0)
+                            {
+                                int max = limits.Value.Maximum;
+                                int def = limits.Value.Default;
+                                int calcOffset = max - def - 25;
+                                int sliderMax;
+                                int ecOffset;
+                                
+                                // User's custom mathematical formula for Omen WMI offsets
+                                if (calcOffset >= 0) {
+                                    sliderMax = 25;
+                                    ecOffset = calcOffset;
+                                } else {
+                                    sliderMax = max - def;
+                                    ecOffset = 0;
+                                }
+                                
+                                AsusACPI.MaxGPUBoost = sliderMax;
+                                trackGPUBoost.Maximum = sliderMax;
+                                
+                                AppConfig.Set("gpu_base_tgp", def);
+                            }
+                            checkOmenLegacySpg.Checked = AppConfig.Get("omen_legacy_spg", 0) == 1;
+                        }
+
                         trackGPUBoost.Value = Math.Max(Math.Min(gpu_boost, AsusACPI.MaxGPUBoost), AsusACPI.MinGPUBoost);
                         trackGPUTemp.Value = Math.Max(Math.Min(gpu_temp, AsusACPI.MaxGPUTemp), AsusACPI.MinGPUTemp);
 
@@ -680,6 +730,36 @@ namespace GHelper
 
         private void VisualiseGPUSettings()
         {
+            // Add check for Ultimate mode for the Omen Dynamic Boost slider
+            if (AppConfig.IsOmen())
+            {
+                bool isUltimate = AppConfig.Get("gpu_mode") == AsusACPI.GPUModeUltimate;
+                trackGPUBoost.Visible = false; // Slider hidden for Omen
+                labelGPUBoostTitle.Visible = false;
+                labelGPUBoost.Visible = false;
+
+                checkOmenUnleashed.Enabled = true;
+
+                if (AppConfig.Is("dev_mode"))
+                {
+                    checkOmenUnleashed.Text = "Unleashed (TPP 255)";
+                    checkOmenLegacySpg.Visible = true;
+                }
+                else
+                {
+                    checkOmenUnleashed.Text = "Unleashed";
+                    checkOmenLegacySpg.Visible = false;
+                }
+
+                checkOmenUnleashed.Location = new Point(10, 14);
+                checkOmenUnleashed.Visible = true;
+            }
+            else
+            {
+                checkOmenLegacySpg.Visible = false;
+                checkOmenUnleashed.Visible = false;
+            }
+
             labelGPUCore.Text = $"{trackGPUCore.Value} MHz";
             labelGPUMemory.Text = $"{trackGPUMemory.Value} MHz";
 
@@ -765,12 +845,28 @@ namespace GHelper
 
         private void trackGPUPower_Scroll(object? sender, EventArgs e)
         {
+            AppConfig.Set("omen_legacy_spg", checkOmenLegacySpg.Checked ? 1 : 0);
             AppConfig.SetMode("gpu_boost", trackGPUBoost.Value);
             AppConfig.SetMode("gpu_temp", trackGPUTemp.Value);
 
             if (isGPUPower) AppConfig.SetMode("gpu_power", trackGPUPower.Value);
 
             VisualiseGPUSettings();
+        }
+
+#if DEBUG
+        private void buttonCalibrate_Click(object? sender, EventArgs e)
+        {
+            GHelper.UI.Commands.CalibratePowerCommand.Run(this);
+        }
+#endif
+
+        private void UpdateModelStatus()
+        {
+            // The adaptive GpuPowerController has been disabled for now at user request.
+            // Hide the status text and the calibration button completely.
+            lblModelStatus.Visible = false;
+            buttonCalibrate.Visible = false;
         }
 
         static string ChartYLabel(int percentage, AsusFan device, string unit = "")
@@ -922,6 +1018,8 @@ namespace GHelper
 
         public void InitPowerPlan()
         {
+            checkOmenUnleashed.Checked = AppConfig.GetMode("omen_unleashed") == 1;
+
             int boost = PowerNative.GetCPUBoost();
             if (boost >= 0)
                 comboBoost.SelectedIndex = Math.Min(boost, comboBoost.Items.Count - 1);
@@ -1039,6 +1137,13 @@ namespace GHelper
             {
                 modeControl.SetPerformanceMode();
             }
+        }
+
+        private void CheckOmenUnleashed_CheckedChanged(object? sender, EventArgs e)
+        {
+            AppConfig.SetMode("omen_unleashed", checkOmenUnleashed.Checked ? 1 : 0);
+            VisualiseGPUSettings();
+            Program.modeControl.SetPower();
         }
 
         private void CheckApplyFans_Click(object? sender, EventArgs e)

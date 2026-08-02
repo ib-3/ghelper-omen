@@ -120,6 +120,7 @@ namespace GHelper
             panelTotal = new Panel();
             labelTotal = new Label();
             labelLeftTotal = new Label();
+            checkOmenUnleashed = new RCheckBox();
             trackTotal = new GHelper.UI.Slider();
             panelTitleCPU = new Panel();
             pictureBoxCPU = new PictureBox();
@@ -141,11 +142,14 @@ namespace GHelper
             panelGPUBoost = new Panel();
             labelGPUBoost = new Label();
             labelGPUBoostTitle = new Label();
+            checkOmenLegacySpg = new RCheckBox();
             trackGPUBoost = new RTrackBar();
             panelGPUPower = new Panel();
             labelGPUPower = new Label();
             labelGPUPowerTitle = new Label();
             trackGPUPower = new RTrackBar();
+            buttonCalibrate = new RButton();
+            lblModelStatus = new Label();
             panelGPUMemory = new Panel();
             labelGPUMemory = new Label();
             labelGPUMemoryTitle = new Label();
@@ -1299,6 +1303,16 @@ namespace GHelper
             labelLeftTotal.TabIndex = 11;
             labelLeftTotal.Text = "SPL";
             // 
+            // checkOmenUnleashed
+            // 
+            checkOmenUnleashed.AutoSize = true;
+            checkOmenUnleashed.Location = new Point(330, 14);
+            checkOmenUnleashed.Name = "checkOmenUnleashed";
+            checkOmenUnleashed.Size = new Size(200, 29);
+            checkOmenUnleashed.TabIndex = 13;
+            checkOmenUnleashed.Text = "Unleashed (TPP 255)";
+            checkOmenUnleashed.UseVisualStyleBackColor = true;
+            // 
             // trackTotal
             // 
             trackTotal.Location = new Point(6, 48);
@@ -1505,13 +1519,13 @@ namespace GHelper
             textEPP.Anchor = AnchorStyles.Top | AnchorStyles.Left;
             textEPP.BackColor = Color.FromArgb(30, 30, 30);
             textEPP.BorderStyle = BorderStyle.FixedSingle;
-            textEPP.Font = new Font("Segoe UI", 11F);
+            textEPP.Font = new Font("Segoe UI", 9F);
             textEPP.ForeColor = Color.White;
             textEPP.Location = new Point(13, 12);
             textEPP.MaxLength = 3;
             textEPP.Margin = new Padding(4);
             textEPP.Name = "textEPP";
-            textEPP.Size = new Size(72, 36);
+            textEPP.Size = new Size(72, 32);
             textEPP.TabIndex = 42;
             textEPP.TextAlign = HorizontalAlignment.Center;
             // 
@@ -1601,6 +1615,8 @@ namespace GHelper
             panelGPUBoost.AutoSizeMode = AutoSizeMode.GrowAndShrink;
             panelGPUBoost.Controls.Add(labelGPUBoost);
             panelGPUBoost.Controls.Add(labelGPUBoostTitle);
+            panelGPUBoost.Controls.Add(checkOmenLegacySpg);
+            panelGPUBoost.Controls.Add(checkOmenUnleashed);
             panelGPUBoost.Controls.Add(trackGPUBoost);
             panelGPUBoost.Dock = DockStyle.Top;
             panelGPUBoost.Location = new Point(0, 556);
@@ -1631,6 +1647,18 @@ namespace GHelper
             labelGPUBoostTitle.TabIndex = 43;
             labelGPUBoostTitle.Text = "Dynamic Boost";
             // 
+            // checkOmenLegacySpg
+            // 
+            checkOmenLegacySpg.AutoSize = true;
+            checkOmenLegacySpg.Location = new Point(190, 14);
+            checkOmenLegacySpg.Margin = new Padding(4, 2, 4, 2);
+            checkOmenLegacySpg.Name = "checkOmenLegacySpg";
+            checkOmenLegacySpg.Size = new Size(130, 36);
+            checkOmenLegacySpg.TabIndex = 45;
+            checkOmenLegacySpg.Text = "Legacy V2";
+            checkOmenLegacySpg.UseVisualStyleBackColor = true;
+            checkOmenLegacySpg.Font = new Font("Segoe UI", 8F);
+            // 
             // trackGPUBoost
             // 
             trackGPUBoost.Location = new Point(6, 48);
@@ -1651,6 +1679,8 @@ namespace GHelper
             panelGPUPower.Controls.Add(labelGPUPower);
             panelGPUPower.Controls.Add(labelGPUPowerTitle);
             panelGPUPower.Controls.Add(trackGPUPower);
+            panelGPUPower.Controls.Add(buttonCalibrate);
+            panelGPUPower.Controls.Add(lblModelStatus);
             panelGPUPower.Dock = DockStyle.Top;
             panelGPUPower.Location = new Point(0, 432);
             panelGPUPower.Margin = new Padding(4);
@@ -1692,6 +1722,29 @@ namespace GHelper
             trackGPUPower.TickFrequency = 5;
             trackGPUPower.TickStyle = TickStyle.TopLeft;
             trackGPUPower.Value = 25;
+            // 
+            // buttonCalibrate
+            // 
+            buttonCalibrate.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            buttonCalibrate.BackColor = SystemColors.ControlLight;
+            buttonCalibrate.FlatAppearance.BorderSize = 0;
+            buttonCalibrate.FlatStyle = FlatStyle.Flat;
+            buttonCalibrate.Location = new Point(236, 11);
+            buttonCalibrate.Name = "buttonCalibrate";
+            buttonCalibrate.Size = new Size(130, 32);
+            buttonCalibrate.TabIndex = 44;
+            buttonCalibrate.Text = "Calibrate Power...";
+            buttonCalibrate.UseVisualStyleBackColor = false;
+            // 
+            // lblModelStatus
+            // 
+            lblModelStatus.AutoSize = true;
+            lblModelStatus.Font = new Font("Segoe UI", 9F, FontStyle.Regular, GraphicsUnit.Point);
+            lblModelStatus.Location = new Point(14, 98);
+            lblModelStatus.Name = "lblModelStatus";
+            lblModelStatus.Size = new Size(111, 20);
+            lblModelStatus.TabIndex = 45;
+            lblModelStatus.Text = "● Model Status";
             // 
             // panelGPUMemory
             // 
@@ -2100,6 +2153,7 @@ namespace GHelper
         private Panel panelTotal;
         private Label labelTotal;
         private Label labelLeftTotal;
+        private RCheckBox checkOmenUnleashed;
         private GHelper.UI.Slider trackTotal;
         private Panel panelTitleCPU;
         private PictureBox pictureBoxCPU;
@@ -2120,6 +2174,7 @@ namespace GHelper
         private Panel panelGPUBoost;
         private Label labelGPUBoost;
         private Label labelGPUBoostTitle;
+        private RCheckBox checkOmenLegacySpg;
         private RTrackBar trackGPUBoost;
         private Panel panelGPUTemp;
         private Label labelGPUTemp;
@@ -2200,6 +2255,8 @@ namespace GHelper
         private Label labelGPUPower;
         private Label labelGPUPowerTitle;
         private RTrackBar trackGPUPower;
+        private RButton buttonCalibrate;
+        private Label lblModelStatus;
         private TableLayoutPanel tableLayoutModes;
         private RCheckBox checkFanClamp;
         private Panel panelHysteresis;

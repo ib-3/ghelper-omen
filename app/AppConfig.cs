@@ -651,7 +651,7 @@ public static class AppConfig
 
     public static bool IsNVPlatform()
     {
-        int val = GetMode("nv_platform");
+        int val = Get("nv_platform");
         if (val == -1)
         {
             try { if (GHelper.Program.acpi?.IsOmen() == true) return true; } catch { }
@@ -661,7 +661,7 @@ public static class AppConfig
 
     public static bool IsKillGpuApps()
     {
-        int val = GetMode("kill_gpu_apps");
+        int val = Get("kill_gpu_apps");
         if (val == -1)
         {
             try { if (GHelper.Program.acpi?.IsOmen() == true) return true; } catch { }

@@ -152,10 +152,15 @@ public class OmenLightingService
 			zones = new Color[1] { Color.White };
 		}
 		float b = GetKeyboardBrightness() / 100f;
-		byte[] array = new byte[zones.Length * 3];
-		for (int i = 0; i < zones.Length; i++)
+		
+		// Ensure we always generate at least 12 bytes (4 zones)
+		// because most backend implementations strictly check for Length >= 12
+		int byteCount = Math.Max(12, zones.Length * 3);
+		byte[] array = new byte[byteCount];
+		
+		for (int i = 0; i < byteCount / 3; i++)
 		{
-			Color color = zones[i];
+			Color color = (i < zones.Length) ? zones[i] : zones[zones.Length - 1];
 			array[i * 3] = (byte)(color.R * b);
 			array[i * 3 + 1] = (byte)(color.G * b);
 			array[i * 3 + 2] = (byte)(color.B * b);

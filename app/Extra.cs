@@ -243,6 +243,7 @@ namespace GHelper
                 panelBacklightHeader.Visible = false;
 
                 InitOmenGpuMode();
+                InitOmenTppOffset();
                 InitOmenRgbMethod();
             }
 
@@ -933,13 +934,13 @@ namespace GHelper
             Panel panelOmenGpuMode = new Panel();
             panelOmenGpuMode.Width = this.Width; // Set initial width so Anchors work correctly
             panelOmenGpuMode.Dock = DockStyle.Top;
-            panelOmenGpuMode.Height = 57; // Same as panelAPU
+            panelOmenGpuMode.Height = 44; // Same as panelAPU
             panelOmenGpuMode.Padding = new Padding(11, 5, 11, 0);
 
             Label labelOmenGpuMode = new Label();
-            labelOmenGpuMode.Text = "Hardware GPU Mode (Requires Restart)";
+            labelOmenGpuMode.Text = "Hardware GPU Mode";
             labelOmenGpuMode.AutoSize = true;
-            labelOmenGpuMode.Location = new Point(50, 15);
+            labelOmenGpuMode.Location = new Point(21, 12);
             labelOmenGpuMode.Font = new Font("Segoe UI", 9F);
 
             RComboBox comboOmenGpuMode = new RComboBox();
@@ -947,7 +948,7 @@ namespace GHelper
             comboOmenGpuMode.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             comboOmenGpuMode.Width = 309;
             comboOmenGpuMode.Height = 40;
-            comboOmenGpuMode.Location = new Point(panelOmenGpuMode.Width - comboOmenGpuMode.Width - 22, 8);
+            comboOmenGpuMode.Location = new Point(panelOmenGpuMode.Width - comboOmenGpuMode.Width - 22, 2);
             comboOmenGpuMode.Font = new Font("Segoe UI", 9F);
             comboOmenGpuMode.Items.AddRange(new object[] { "Hybrid", "Dedicated", "Integrated" });
 
@@ -980,6 +981,75 @@ namespace GHelper
             }
         }
 
+        private void InitOmenTppOffset()
+        {
+            if (!Program.acpi.IsOmen()) return;
+
+            int currentOffset = AppConfig.Get("omen_tpp_offset", -1);
+
+            Panel panelOmenTpp = new Panel();
+            panelOmenTpp.Width = this.Width;
+            panelOmenTpp.Dock = DockStyle.Top;
+            panelOmenTpp.Height = 44;
+            panelOmenTpp.Padding = new Padding(11, 5, 11, 0);
+
+            Label labelOmenTpp = new Label();
+            labelOmenTpp.Text = "Omen Legacy TPP Offset";
+            labelOmenTpp.AutoSize = true;
+            labelOmenTpp.Location = new Point(21, 12);
+            labelOmenTpp.Font = new Font("Segoe UI", 9F);
+
+            RComboBox comboOmenTpp = new RComboBox();
+            comboOmenTpp.DropDownStyle = ComboBoxStyle.DropDownList;
+            comboOmenTpp.Anchor = AnchorStyles.Top | AnchorStyles.Right;
+            comboOmenTpp.Width = 309;
+            comboOmenTpp.Height = 40;
+            comboOmenTpp.Location = new Point(panelOmenTpp.Width - comboOmenTpp.Width - 22, 2);
+            comboOmenTpp.Font = new Font("Segoe UI", 9F);
+            
+            // Available offsets (including -1 for Auto)
+            int[] offsets = { -1, 0, 40, 45, 50, 55, 60, 65, 70, 75, 80 };
+            
+            comboOmenTpp.Items.Add("Auto (Calculated)");
+            for (int i = 1; i < offsets.Length; i++)
+            {
+                comboOmenTpp.Items.Add($"{offsets[i]}W");
+            }
+
+            int selectedIndex = 0;
+            for (int i = 0; i < offsets.Length; i++)
+            {
+                if (offsets[i] == currentOffset)
+                {
+                    selectedIndex = i;
+                    break;
+                }
+            }
+            comboOmenTpp.SelectedIndex = selectedIndex;
+
+            comboOmenTpp.SelectedIndexChanged += (s, e) =>
+            {
+                int newOffset = offsets[comboOmenTpp.SelectedIndex];
+                AppConfig.Set("omen_tpp_offset", newOffset);
+            };
+
+            panelOmenTpp.Controls.Add(labelOmenTpp);
+            panelOmenTpp.Controls.Add(comboOmenTpp);
+
+            this.Controls.Add(panelOmenTpp);
+            
+            int gpuIndex = this.Controls.IndexOf(this.Controls.OfType<Panel>().FirstOrDefault(p => p.Controls.OfType<Label>().Any(l => l.Text.Contains("Hardware GPU"))));
+            if (gpuIndex >= 0)
+            {
+                this.Controls.SetChildIndex(panelOmenTpp, gpuIndex + 1);
+            }
+            else
+            {
+                int apuIndex = this.Controls.IndexOf(panelAPU);
+                if (apuIndex >= 0) this.Controls.SetChildIndex(panelOmenTpp, apuIndex + 1);
+            }
+        }
+
         private void InitOmenRgbMethod()
         {
             if (!Program.acpi.IsOmen()) return;
@@ -989,13 +1059,13 @@ namespace GHelper
             Panel panelOmenRgb = new Panel();
             panelOmenRgb.Width = this.Width;
             panelOmenRgb.Dock = DockStyle.Top;
-            panelOmenRgb.Height = 57;
+            panelOmenRgb.Height = 44;
             panelOmenRgb.Padding = new Padding(11, 5, 11, 0);
 
             Label labelOmenRgb = new Label();
             labelOmenRgb.Text = "Omen RGB Method";
             labelOmenRgb.AutoSize = true;
-            labelOmenRgb.Location = new Point(50, 15);
+            labelOmenRgb.Location = new Point(21, 12);
             labelOmenRgb.Font = new Font("Segoe UI", 9F);
 
             RComboBox comboOmenRgb = new RComboBox();
@@ -1003,7 +1073,7 @@ namespace GHelper
             comboOmenRgb.Anchor = AnchorStyles.Top | AnchorStyles.Right;
             comboOmenRgb.Width = 309;
             comboOmenRgb.Height = 40;
-            comboOmenRgb.Location = new Point(panelOmenRgb.Width - comboOmenRgb.Width - 22, 8);
+            comboOmenRgb.Location = new Point(panelOmenRgb.Width - comboOmenRgb.Width - 22, 2);
             comboOmenRgb.Font = new Font("Segoe UI", 9F);
             comboOmenRgb.Items.AddRange(new object[] { 
                 "Auto (Detect)", 

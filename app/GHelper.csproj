@@ -16,9 +16,9 @@
     <PlatformTarget>AnyCPU</PlatformTarget>
     <ProduceReferenceAssembly>False</ProduceReferenceAssembly>
     <AllowUnsafeBlocks>True</AllowUnsafeBlocks>
-    <AssemblyVersion>1.0.0.0</AssemblyVersion>
-    <FileVersion>1.0.0.0</FileVersion>
-    <Version>1.0.0.0</Version>
+    <AssemblyVersion>1.5.0.0</AssemblyVersion>
+    <FileVersion>1.5.0.0</FileVersion>
+    <Version>1.5.0</Version>
   </PropertyGroup>
 
   <PropertyGroup Condition="'$(Configuration)|$(Platform)'=='Debug|AnyCPU'">
@@ -71,6 +71,9 @@
     <PackageReference Include="LibreHardwareMonitorLib" Version="0.9.4" />
     <PackageReference Include="System.ServiceProcess.ServiceController" Version="9.0.0" />
     <PackageReference Include="TaskScheduler" Version="2.12.2" />
+    <PackageReference Include="Vortice.D3DCompiler" Version="3.4.2" />
+    <PackageReference Include="Vortice.Direct3D11" Version="3.4.2" />
+    <PackageReference Include="Vortice.DXGI" Version="3.4.2" />
     <PackageReference Include="WinForms.DataVisualization" Version="1.10.0" />
   </ItemGroup>
 
@@ -112,4 +115,13 @@
 	<Target Name="ZipSingleExe" AfterTargets="Publish" Condition="'$(GITHUB_ACTIONS)'!='true'">
 		<Exec Command="powershell -NoProfile -Command &quot;$pub = '$(PublishDir)'.TrimEnd('\\'); $zip = $pub + '\GHelper.zip'; Remove-Item $zip -ErrorAction SilentlyContinue; Get-ChildItem $pub -Exclude 'GHelper.zip' | Compress-Archive -DestinationPath $zip -Force; Write-Host 'Zipped to ' + $zip&quot;" />
 	</Target>
+
+	<ItemGroup Condition="'$(Configuration)' == 'Release'">
+		<Compile Remove="Omen\Adaptive\**\*.cs" />
+		<Compile Remove="Omen\GpuPowerController.cs" />
+		<Compile Remove="UI\CalibratePowerCommand.cs" />
+		<Compile Remove="UI\CalibrationProgressForm.cs" />
+		<Compile Remove="UI\CalibrationProgressForm.Designer.cs" />
+		<EmbeddedResource Remove="UI\CalibrationProgressForm.resx" />
+	</ItemGroup>
 </Project>

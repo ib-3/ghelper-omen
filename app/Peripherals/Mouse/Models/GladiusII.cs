@@ -1,4 +1,4 @@
-﻿namespace GHelper.Peripherals.Mouse.Models
+namespace GHelper.Peripherals.Mouse.Models
 {
     //P504
     public class GladiusIIOrigin : AsusMouse
@@ -362,7 +362,7 @@
             };
         }
 
-        protected LightingSetting? ParseLightingSetting(byte[] packet, LightingZone zone)
+        protected new LightingSetting? ParseLightingSetting(byte[] packet, LightingZone zone)
         {
             if (packet[1] != 0x12 || packet[2] != 0x03)
             {

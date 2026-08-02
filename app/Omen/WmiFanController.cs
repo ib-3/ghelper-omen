@@ -1425,9 +1425,9 @@ namespace OmenCore.Hardware
         /// <summary>
         /// Set GPU power level.
         /// </summary>
-        public bool SetGpuPower(HpWmiBios.GpuPowerLevel level)
+        public bool SetGpuPower(HpWmiBios.GpuPowerLevel level, int tempTarget = 0, int dState = 1)
         {
-            return _wmiBios.SetGpuPower(level);
+            return _wmiBios.SetGpuPower(level, tempTarget, dState);
         }
 
         /// <summary>
